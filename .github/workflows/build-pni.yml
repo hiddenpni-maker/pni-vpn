@@ -7,12 +7,17 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -31,22 +36,35 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: Set up Android SDK & NDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
 
-      - name: Install Android NDK 27 and Platform 35
+      - name: Configure Android NDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          if [ -n "${ANDROID_NDK_LATEST_HOME:-}" ] && [ -d "${ANDROID_NDK_LATEST_HOME}" ]; then
+            NDK_DIR="$ANDROID_NDK_LATEST_HOME"
+          else
+            NDK_PKG="$(sdkmanager --list | grep -oE 'ndk;[0-9.]+' | sort -V | tail -1)"
+            yes | sdkmanager --install "$NDK_PKG" >/dev/null || true
+            NDK_DIR="$ANDROID_HOME/${NDK_PKG/;/\/}"
+          fi
+          echo "Using NDK: $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
 
       - name: Fetch GeoIP/GeoSite, Tor Bridges & CDN CIDRs
+        shell: bash
         run: bash scripts/fetch-assets.sh
 
       - name: Build Go Cores (pni-core.aar + libpnisingbox.so) & Run Go Tests
+        shell: bash
         run: bash scripts/build-cores.sh
 
-      - name: Build Native Binaries (hev-socks5-tunnel, Tor, Lyrebird, Psiphon, Aether)
+      - name: Build Native Binaries (hev-socks5-tunnel, Tor, Lyrebird, Psiphon, Aether, DNSTT)
+        shell: bash
         run: bash scripts/build-binaries.sh
 
       - name: Set up Gradle
@@ -55,10 +73,13 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Run Unit Tests & Build APKs
-        run: gradle testDebugUnitTest assembleDebug assembleRelease
+        shell: bash
+        run: gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug assembleRelease
 
       - name: Upload PNI APK Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pni-apks
           path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -3,12 +3,13 @@ name: Build PNI Android APK
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -78,14 +79,66 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Run Unit Tests & Build APKs
+      - name: Run Unit Tests & Build Release APKs
         shell: bash
-        run: gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug assembleRelease
+        run: gradle --no-daemon --stacktrace testDebugUnitTest assembleRelease
 
-      - name: Upload PNI APK Artifacts
+      - name: Prepare Separate Release APK Files & Checksums
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          for abi in arm64-v8a armeabi-v7a x86_64 universal; do
+            src=$(ls app/build/outputs/apk/release/app-${abi}-release*.apk 2>/dev/null | head -1 || true)
+            if [ -n "$src" ] && [ -f "$src" ]; then
+              cp "$src" "release-assets/PNI-${abi}.apk"
+            fi
+          done
+          (cd release-assets && sha256sum *.apk > SHA256SUMS.txt)
+          ls -lh release-assets/
+
+      - name: Upload Individual APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pni-apks
-          path: app/build/outputs/apk/**/*.apk
+          name: PNI-arm64-v8a
+          path: release-assets/PNI-arm64-v8a.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+
+      - name: Upload ARMv7 APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PNI-armeabi-v7a
+          path: release-assets/PNI-armeabi-v7a.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload x86_64 APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PNI-x86_64
+          path: release-assets/PNI-x86_64.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Universal APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PNI-universal
+          path: release-assets/PNI-universal.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release with Separate APK Links
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          name: "PNI ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }} (Android)"
+          body_path: .github/release-notes.md
+          make_latest: true
+          files: |
+            release-assets/PNI-arm64-v8a.apk
+            release-assets/PNI-armeabi-v7a.apk
+            release-assets/PNI-x86_64.apk
+            release-assets/PNI-universal.apk
+            release-assets/SHA256SUMS.txt

@@ -96,7 +96,7 @@ data class ProxyProfile(
     val dnsInnerMode: String = "ssh",
     val dnsInnerUser: String = "",
     val dnsInnerPass: String = "",
-    val dnsUtls: String = "3*Firefox,2*Chrome,1*iOS",
+    val dnsUtls: String = "",
     val rawShareLink: String = "",
     val rawCustomJson: String = "",
     val latencyMs: Int? = null,

@@ -31,11 +31,6 @@ jobs:
           go-version: 'stable'
           cache: false
 
-      - name: Set up Rust (for Aether core)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:

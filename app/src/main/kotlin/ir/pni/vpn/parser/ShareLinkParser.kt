@@ -305,7 +305,7 @@ object ShareLinkParser {
             dnsInnerMode = inner,
             dnsInnerUser = decodeUrl(q["user"]),
             dnsInnerPass = decodeUrl(q["pass"]),
-            dnsUtls = decodeUrl(q["utls"]).ifBlank { "3*Firefox,2*Chrome,1*iOS" },
+            dnsUtls = decodeUrl(q["utls"]),
             rawShareLink = line
         )
     }
@@ -365,9 +365,9 @@ object ShareLinkParser {
                 val params = linkedMapOf(
                     "mode" to profile.dnsTransport,
                     "resolver" to profile.dnsResolver,
-                    "inner" to profile.dnsInnerMode,
-                    "utls" to profile.dnsUtls
+                    "inner" to profile.dnsInnerMode
                 )
+                if (profile.dnsUtls.isNotBlank()) params["utls"] = profile.dnsUtls
                 if (profile.dnsInnerUser.isNotBlank()) params["user"] = profile.dnsInnerUser
                 if (profile.dnsInnerPass.isNotBlank()) params["pass"] = profile.dnsInnerPass
                 val query = params.entries.joinToString("&") { (k, v) ->

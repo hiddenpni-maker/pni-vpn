@@ -463,7 +463,7 @@ class PniViewModel(application: Application) : AndroidViewModel(application) {
             dnsInnerMode = innerMode,
             dnsInnerUser = innerUser.trim(),
             dnsInnerPass = innerPass,
-            dnsUtls = utls.ifBlank { "3*Firefox,2*Chrome,1*iOS" },
+            dnsUtls = utls.trim(),
             group = "DNS Tunnel (AM Mode)"
         )
         val withLink = profile.copy(rawShareLink = ShareLinkParser.toShareLink(profile))

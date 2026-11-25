@@ -186,7 +186,7 @@ fun ToolsScreen(
                                 dnsInnerMode,
                                 dnsInnerUser,
                                 dnsInnerPass,
-                                "3*Firefox,2*Chrome,1*iOS"
+                                ""
                             )
                         },
                         modifier = Modifier.weight(1f)

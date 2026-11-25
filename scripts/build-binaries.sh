@@ -8,7 +8,7 @@ JNI_OUT="$ROOT_DIR/app/src/main/jniLibs"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-echo "[1/3] Building libhev-socks5-tunnel.so (JNI package ir/pni/vpn/service)..."
+echo "[1/4] Building libhev-socks5-tunnel.so (JNI package ir/pni/vpn/service)..."
 git clone --depth=1 --recursive https://github.com/heiher/hev-socks5-tunnel.git "$TMP/hev"
 mkdir -p "$TMP/jni"
 echo 'include $(call all-subdir-makefiles)' > "$TMP/jni/Android.mk"
@@ -29,27 +29,28 @@ for abi in arm64-v8a armeabi-v7a x86_64; do
   cp "$TMP/hev-libs/$abi/libhev-socks5-tunnel.so" "$JNI_OUT/$abi/libhev-socks5-tunnel.so"
 done
 
-echo "[2/3] Fetching Tor Project Android Expert Bundle (libtor.so + liblyrebird.so)..."
-TOR_VER=16.0.2
+echo "[2/4] Fetching Tor Project Android Expert Bundle (libtor.so + liblyrebird.so)..."
+TOR_VER=$(curl -fsSL https://dist.torproject.org/torbrowser/ | sed -nE 's/.*href="([0-9]+\.[0-9]+\.[0-9]+)\/".*/\1/p' | sort -V | tail -1 || true)
+TOR_VER="${TOR_VER:-16.0.3}"
 BASE="https://dist.torproject.org/torbrowser/$TOR_VER"
+echo "Using Tor Expert Bundle version: $TOR_VER"
+curl -fsSL -o "$TMP/sha256sums.txt" "$BASE/sha256sums-signed-build.txt"
 declare -A ABI_MAP=([aarch64]=arm64-v8a [armv7]=armeabi-v7a [x86_64]=x86_64)
-declare -A SHA_MAP=(
-  [aarch64]=5fc4967b88bbf81546386bbdecbe86a70982ff7810cef8a155040f8aedd1905f
-  [armv7]=db2b893bc5d2d09af267f07ca1e0178b39a4e9a47be0c1d577288992d
-  [x86_64]=2a3e89f991dc753306984dfadcd79e4017eb162e2a376b7ff42653c4b0c61286
-)
 
 for arch in aarch64 armv7 x86_64; do
   file="tor-expert-bundle-android-$arch-$TOR_VER.tar.gz"
   curl -fsSL -o "$TMP/$file" "$BASE/$file"
-  echo "${SHA_MAP[$arch]}  $TMP/$file" | sha256sum -c --quiet -
+  expected_sha=$(grep "  $file\$" "$TMP/sha256sums.txt" | awk '{print $1}')
+  if [ -n "$expected_sha" ]; then
+    echo "$expected_sha  $TMP/$file" | sha256sum -c --quiet -
+  fi
   mkdir -p "$TMP/tor-$arch"
   tar -xzf "$TMP/$file" -C "$TMP/tor-$arch"
   cp "$TMP/tor-$arch/tor/libTor.so" "$JNI_OUT/${ABI_MAP[$arch]}/libtor.so"
   cp "$TMP/tor-$arch/tor/pluggable_transports/lyrebird" "$JNI_OUT/${ABI_MAP[$arch]}/liblyrebird.so"
 done
 
-echo "[3/3] Building optional Psiphon & Aether binaries if sources/toolchains exist..."
+echo "[3/4] Building optional Psiphon & Aether binaries if sources/toolchains exist..."
 if command -v go >/dev/null 2>&1; then
   git clone --depth=1 https://github.com/bia-pain-bache/BPB-VPN.git "$TMP/bpb" || true
   if [ -d "$TMP/bpb/psiphon" ]; then
@@ -88,6 +89,7 @@ if command -v go >/dev/null 2>&1; then
     BIN="$NDK/toolchains/llvm/prebuilt/$HOST/bin"
     (
       cd "$TMP/dnstt/dnstt-client"
+      export GOTOOLCHAIN=go1.23.6
       CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$BIN/aarch64-linux-android24-clang" \
         go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -o "$JNI_OUT/arm64-v8a/libdnstt.so" .
       CGO_ENABLED=1 GOOS=android GOARCH=arm GOARM=7 CC="$BIN/armv7a-linux-androideabi24-clang" \

@@ -1,0 +1,14 @@
+.gradle/
+build/
+app/build/
+app/libs/*.aar
+app/libs/*.jar
+app/src/main/jniLibs/
+app/src/main/assets/geo/*.dat
+app/src/main/assets/tor/bridges.json
+local.properties
+keystore.properties
+*.iml
+.idea/
+.DS_Store
+core-go/**/.bin/

@@ -1,0 +1,5 @@
+-keep class ir.pni.core.** { *; }
+-keep class core.** { *; }
+-keep class go.** { *; }
+-dontwarn go.**
+-dontwarn kotlinx.serialization.**

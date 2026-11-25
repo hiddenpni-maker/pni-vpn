@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Cloudflare DoH (پیشنهادی)",
+    "url": "https://1.1.1.1/dns-query",
+    "fallback": "1.0.0.1",
+    "notes": "سریع و مناسب همراه اول، ایرانسل و فیبر"
+  },
+  {
+    "name": "Google DoH",
+    "url": "https://dns.google/dns-query",
+    "fallback": "8.8.4.4",
+    "notes": "مناسب TD-LTE و خطوط ثابت"
+  },
+  {
+    "name": "Quad9 Secure DoH",
+    "url": "https://dns.quad9.net/dns-query",
+    "fallback": "9.9.9.9",
+    "notes": "پایدار در زمان مسمومیت DNS اپراتورها"
+  },
+  {
+    "name": "AdGuard DoH (حذف تبلیغات)",
+    "url": "https://dns.adguard-dns.com/dns-query",
+    "fallback": "94.140.14.14",
+    "notes": "حذف تبلیغات و ردیاب‌ها"
+  },
+  {
+    "name": "Mullvad DoH (حریم خصوصی)",
+    "url": "https://dns.mullvad.net/dns-query",
+    "fallback": "194.242.2.2",
+    "notes": "بدون لاگ و مقاوم در برابر سانسور"
+  }
+]

@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">PNI</string>
+    <string name="notif_channel_vpn">تونل امن PNI</string>
+    <string name="notif_channel_vpn_desc">وضعیت اتصال VPN و سرعت لحظه‌ای</string>
+    <string name="notif_channel_tools">موتورهای محلی PNI</string>
+    <string name="notif_channel_tools_desc">سرویس SNI Spoof و اسکنر</string>
+    <string name="spoof_service_title">موتور محلی SNI Spoof</string>
+    <string name="action_disconnect">قطع اتصال</string>
+</resources>

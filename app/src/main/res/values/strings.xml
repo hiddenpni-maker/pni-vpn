@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">PNI VPN</string>
+    <string name="notif_channel_vpn">PNI VPN Tunnel</string>
+    <string name="notif_channel_vpn_desc">VPN connection status and traffic telemetry</string>
+    <string name="notif_channel_tools">PNI Local Engines</string>
+    <string name="notif_channel_tools_desc">SNI Spoof and scanner background services</string>
+    <string name="spoof_service_title">PNI Local SNI Spoof</string>
+    <string name="action_disconnect">Disconnect</string>
+</resources>

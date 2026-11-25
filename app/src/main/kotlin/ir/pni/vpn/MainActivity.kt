@@ -146,7 +146,7 @@ private fun PniApp(
     val vpnPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { res ->
-        if (res.resultCode == ComponentActivity.RESULT_OK) {
+        if (res.resultCode == android.app.Activity.RESULT_OK) {
             vm.connectOrDisconnect()
         } else {
             vm.showToast("مجوز VPN توسط سیستم تایید نشد")

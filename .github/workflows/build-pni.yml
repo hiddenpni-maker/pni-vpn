@@ -54,11 +54,22 @@ jobs:
         shell: bash
         run: bash scripts/fetch-assets.sh
 
+      - name: Cache Built Cores & Native Binaries
+        id: cache-native
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/libs/pni-core.aar
+            app/src/main/jniLibs
+          key: pni-native-v1-${{ hashFiles('core-go/**', 'scripts/build-cores.sh', 'scripts/build-binaries.sh') }}
+
       - name: Build Go Cores (pni-core.aar + libpnisingbox.so) & Run Go Tests
+        if: steps.cache-native.outputs.cache-hit != 'true'
         shell: bash
         run: bash scripts/build-cores.sh
 
       - name: Build Native Binaries (hev-socks5-tunnel, Tor, Lyrebird, Psiphon, Aether, DNSTT)
+        if: steps.cache-native.outputs.cache-hit != 'true'
         shell: bash
         run: bash scripts/build-binaries.sh
 

@@ -57,15 +57,21 @@ class PniQsTileService : TileService() {
         when (PniVpnService.state.value) {
             ConnectionState.CONNECTED -> {
                 tile.state = Tile.STATE_ACTIVE
-                tile.subtitle = "متصل"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    tile.subtitle = "متصل"
+                }
             }
             ConnectionState.CONNECTING -> {
                 tile.state = Tile.STATE_ACTIVE
-                tile.subtitle = "در حال اتصال..."
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    tile.subtitle = "در حال اتصال..."
+                }
             }
             else -> {
                 tile.state = Tile.STATE_INACTIVE
-                tile.subtitle = "قطع"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    tile.subtitle = "قطع"
+                }
             }
         }
         tile.updateTile()

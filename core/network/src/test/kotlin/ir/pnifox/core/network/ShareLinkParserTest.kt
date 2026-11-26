@@ -133,4 +133,45 @@ class ShareLinkParserTest {
         assertTrue(VersionComparator.isRemoteNewer("2.0.0", "v2.1.0"))
         assertTrue(!VersionComparator.isRemoteNewer("2.1.0", "v2.0.9"))
     }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun `parses clash yaml, singbox json, unicode remarks, legacy ss, and commented base64 subscriptions`() {
+        // 1. Commented Base64 subscription with https:// in comment (previously skipped Base64 decode)
+        val unicodeVless = "vless://11111111-1111-1111-1111-111111111111@de.example.com:443?security=tls&sni=cdn.de.com#سرور آلمان 🇩🇪"
+        val legacySs = "ss://${Base64.encode("chacha20-ietf-poly1305:pw@1.2.3.4:8388".encodeToByteArray())}#Legacy SS Node"
+        val payload = "# Support: https://t.me/otaqe_pni\n" + Base64.encode("$unicodeVless\n$legacySs".encodeToByteArray())
+        val fromSub = ShareLinkParser.parseBatch(payload)
+        assertEquals(2, fromSub.size)
+        assertEquals("سرور آلمان 🇩🇪", fromSub[0].name)
+        assertEquals(ProxyProtocol.SHADOWSOCKS, fromSub[1].protocol)
+        assertEquals("chacha20-ietf-poly1305:pw", fromSub[1].secret)
+
+        // 2. Clash YAML proxies block
+        val clashYaml = """
+            port: 7890
+            proxies:
+              - name: "Clash-VLESS"
+                type: vless
+                server: edge.clash.example
+                port: 8443
+                uuid: 22222222-2222-2222-2222-222222222222
+                servername: front.example.com
+                network: ws
+              - {name: "Clash-Hy2", type: hysteria2, server: hy.example.com, port: 443, password: "secret", sni: "hy.sni"}
+        """.trimIndent()
+        val fromYaml = ShareLinkParser.parseBatch(clashYaml)
+        assertEquals(2, fromYaml.size)
+        assertEquals("Clash-VLESS", fromYaml[0].name)
+        assertEquals(ProxyProtocol.HYSTERIA2, fromYaml[1].protocol)
+
+        // 3. Sing-box JSON outbounds
+        val singBoxJson = """
+            {"outbounds":[{"type":"direct","tag":"direct"},{"type":"vless","tag":"SB-Node","server":"sb.example.com","server_port":443,"uuid":"33333333-3333-3333-3333-333333333333","tls":{"enabled":true,"server_name":"sb.sni"}}]}
+        """.trimIndent()
+        val fromSb = ShareLinkParser.parseBatch(singBoxJson)
+        assertEquals(1, fromSb.size)
+        assertEquals("SB-Node", fromSb[0].name)
+        assertEquals("sb.sni", fromSb[0].sni)
+    }
 }

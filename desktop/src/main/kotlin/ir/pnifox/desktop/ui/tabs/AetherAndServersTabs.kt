@@ -60,6 +60,7 @@ import ir.pnifox.core.model.ExitNode
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.PnifoxRegionsCatalog
 import ir.pnifox.core.model.ProxyProfile
+import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.network.ShareLinkParser
 import ir.pnifox.desktop.ui.DesktopBadgePill
@@ -133,6 +134,14 @@ fun AetherDesktopTab(
                         Spacer(Modifier.width(6.dp))
                         Text(dtr("Re-scan Endpoint", "اسکن مجدد اندپوینت"))
                     }
+                    OutlinedButton(
+                        onClick = { holder.clearAetherCache() },
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Icon(Icons.Rounded.DeleteOutline, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(dtr("Reset Psiphon / Tor Cache", "پاکسازی کش سایفون / تور"))
+                    }
                 }
             }
         }
@@ -181,6 +190,20 @@ fun AetherDesktopTab(
                             },
                             label = { Text("${reg.flag} ${if (isFa) reg.nameFa else reg.nameEn}") },
                         )
+                    }
+                }
+                if (aether.psiphonEnabled || app.activePreset == OneTapPreset.WARP_TO_PSIPHON) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(dtr("Psiphon Transport Mode (Switch to CDN/Meek if Auto stalls)", "حالت اتصال سایفون (اگر Auto وصل نشد، CDN/Meek را امتحان کنید)"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PsiphonChainMode.entries.forEach { pm ->
+                            FilterChip(
+                                selected = aether.psiphonMode == pm,
+                                onClick = { holder.updateAether { it.copy(psiphonMode = pm) } },
+                                label = { Text(if (isFa) pm.labelFa else pm.labelEn) },
+                            )
+                        }
                     }
                 }
             }
@@ -285,15 +308,39 @@ fun ServersDesktopTab(
                         Spacer(Modifier.width(6.dp))
                         Text(dtr("Add Subscription", "افزودن اشتراک"))
                     }
-                    OutlinedButton(onClick = { holder.refreshAllSubscriptions() }, shape = RoundedCornerShape(10.dp)) {
-                        Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(16.dp))
+                    OutlinedButton(onClick = { holder.refreshAllSubscriptions() }, enabled = !state.isSyncingSubs, shape = RoundedCornerShape(10.dp)) {
+                        if (state.isSyncingSubs) CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(dtr("Sync Subs", "بروزرسانی ساب"))
+                        Text(if (state.isSyncingSubs) dtr("Syncing...", "در حال دریافت...") else dtr("Sync Subs", "بروزرسانی ساب"))
                     }
                     OutlinedButton(onClick = { holder.pingAllProfiles() }, enabled = !state.isTestingAllServers, shape = RoundedCornerShape(10.dp)) {
                         Icon(Icons.Rounded.Speed, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text(if (state.isTestingAllServers) dtr("Probing...", "تست...") else dtr("Test All Real Delay", "تست پینگ همه"))
+                    }
+                }
+            }
+        }
+
+        if (persisted.subscriptions.isNotEmpty()) {
+            item {
+                DesktopCard(padding = 10.dp) {
+                    Text(dtr("Subscriptions (${persisted.subscriptions.size})", "لینک‌های اشتراک (${persisted.subscriptions.size})"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    persisted.subscriptions.forEach { sub ->
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(sub.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${sub.profileCount} servers • ${sub.url}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            IconButton(onClick = { holder.syncSingleSubscription(sub) }, enabled = !state.isSyncingSubs, modifier = Modifier.size(30.dp)) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = "Sync Subscription", modifier = Modifier.size(16.dp))
+                            }
+                            IconButton(onClick = { holder.deleteSubscription(sub.id) }, modifier = Modifier.size(30.dp)) {
+                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete Subscription", modifier = Modifier.size(16.dp))
+                            }
+                        }
                     }
                 }
             }
@@ -364,12 +411,12 @@ fun ServersDesktopTab(
         var raw by remember { mutableStateOf(clipboard.getText()?.text.orEmpty()) }
         AlertDialog(
             onDismissRequest = { showImportDialog = false },
-            title = { Text(dtr("Import Configs (URI / Base64 / JSON)", "ورود کانفیگ (لینک یا JSON)")) },
+            title = { Text(dtr("Import Configs or Subscription (URI / Base64 / YAML / JSON / URL)", "ورود کانفیگ یا لینک اشتراک")) },
             text = {
                 OutlinedTextField(
                     value = raw,
                     onValueChange = { raw = it },
-                    label = { Text("vless:// vmess:// trojan:// hy2:// or {\"outbounds\":...}") },
+                    label = { Text("vless://, vmess://, trojan://, hy2://, https://... sub link, Clash YAML or JSON") },
                     minLines = 5,
                     maxLines = 10,
                     modifier = Modifier.fillMaxWidth(),

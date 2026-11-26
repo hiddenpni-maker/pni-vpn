@@ -11,6 +11,7 @@ import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.ParsedRuleKind
 import ir.pnifox.core.model.PnifoxRulesetsCatalog
+import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.model.TransportMode
 import java.io.File
 import javax.inject.Inject
@@ -102,18 +103,35 @@ class AetherArgBuilder @Inject constructor() {
         // When chaining Tor or Psiphon, Aether itself listens on inner port and Tor/Psiphon
         // exposes the final SOCKS5 proxy directly on localSocksPort (127.0.0.1:10820 or 0.0.0.0 when allowLan=true).
         val publicBindHost = if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1"
+        val psiphonStandalone = usePsiphon && aether.psiphonMode == PsiphonChainMode.STANDALONE
         if (usePsiphon) {
-            add("--bind")
-            add("127.0.0.1:${aether.innerAetherBindPort}")
-            add("--psiphon")
-            add("--psiphon-bind")
-            add("$publicBindHost:${aether.localSocksPort}")
+            if (psiphonStandalone) {
+                add("--bind")
+                add("$publicBindHost:${aether.localSocksPort}")
+                add("--psiphon-only")
+                if (exposeLocalHttpProxy) {
+                    add("--psiphon-http")
+                    add("$publicBindHost:${appSettings.httpProxyPort}")
+                }
+            } else {
+                add("--bind")
+                add("127.0.0.1:${aether.innerAetherBindPort}")
+                add("--psiphon")
+                add("--psiphon-bind")
+                add("$publicBindHost:${aether.localSocksPort}")
+                if (exposeLocalHttpProxy) {
+                    add("--psiphon-http")
+                    add("$publicBindHost:${appSettings.httpProxyPort}")
+                }
+            }
             add("--psiphon-mode")
             add(aether.psiphonMode.cliMode)
             add("--psiphon-dir")
             add(File(workDir, "psiphon-cache").absolutePath)
-            val psiphonBin = File(nativeDir, "libpsiphon.so")
-            if (psiphonBin.exists()) {
+            val psiphonBin = listOf("psiphon-tunnel-core.exe", "libpsiphon.so")
+                .map { File(nativeDir, it) }
+                .firstOrNull { it.exists() }
+            if (psiphonBin != null) {
                 add("--psiphon-bin")
                 add(psiphonBin.absolutePath)
             }
@@ -135,10 +153,16 @@ class AetherArgBuilder @Inject constructor() {
             add("--tor")
             add("--tor-bind")
             add("$publicBindHost:${aether.localSocksPort}")
+            if (exposeLocalHttpProxy) {
+                add("--tor-http")
+                add("$publicBindHost:${appSettings.httpProxyPort}")
+            }
             add("--tor-dir")
             add(File(workDir, "tor-cache").absolutePath)
-            val lyrebirdBin = File(nativeDir, "liblyrebird.so")
-            if (lyrebirdBin.exists()) {
+            val lyrebirdBin = listOf("lyrebird.exe", "liblyrebird.so")
+                .map { File(nativeDir, it) }
+                .firstOrNull { it.exists() }
+            if (lyrebirdBin != null) {
                 add("--tor-pt")
                 add("obfs4=${lyrebirdBin.absolutePath}")
             }
@@ -155,10 +179,20 @@ class AetherArgBuilder @Inject constructor() {
         } else {
             add("--bind")
             add("$publicBindHost:${aether.localSocksPort}")
+            if (exposeLocalHttpProxy) {
+                add("--http-proxy")
+                add("$publicBindHost:${appSettings.httpProxyPort}")
+            }
         }
-        if (exposeLocalHttpProxy) {
-            add("--http-proxy")
-            add("$publicBindHost:${appSettings.httpProxyPort}")
+
+        if (psiphonStandalone) {
+            if (routesFile != null && routesFile.exists()) {
+                add("--routes")
+                add(routesFile.absolutePath)
+            }
+            add("--log-level")
+            add("info")
+            return@buildList
         }
 
         val effectiveProto = when (appSettings.activePreset) {

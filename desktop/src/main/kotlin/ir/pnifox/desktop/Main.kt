@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Radar
@@ -57,6 +59,7 @@ import androidx.compose.ui.window.rememberWindowState
 import ir.pnifox.core.model.ActiveSectionEngine
 import ir.pnifox.core.model.AppLanguage
 import ir.pnifox.core.model.TunnelState
+import ir.pnifox.desktop.core.WindowsSecurityHelper
 import ir.pnifox.desktop.model.DesktopTab
 import ir.pnifox.desktop.ui.DesktopBadgePill
 import ir.pnifox.desktop.ui.DesktopCard
@@ -71,13 +74,28 @@ import ir.pnifox.desktop.ui.tabs.MhrDesktopTab
 import ir.pnifox.desktop.ui.tabs.ScannerDesktopTab
 import ir.pnifox.desktop.ui.tabs.ServersDesktopTab
 import ir.pnifox.desktop.ui.tabs.SettingsDesktopTab
-import java.awt.Desktop
-import java.net.URI
 
 fun main() = application {
     val holder = remember { DesktopStateHolder() }
+    val instanceLock = remember { WindowsSecurityHelper.acquireSingleInstanceLock(holder.store.dataDir) }
     val state by holder.uiState.collectAsState()
     var windowVisible by remember { mutableStateOf(true) }
+
+    if (instanceLock == null) {
+        Window(
+            onCloseRequest = { exitApplication() },
+            title = "pnifox — Already Running",
+            state = rememberWindowState(width = 420.dp, height = 210.dp),
+        ) {
+            AlertDialog(
+                onDismissRequest = { exitApplication() },
+                title = { Text("pnifox is already running") },
+                text = { Text("Another pnifox window is already open (check the system tray near the clock).") },
+                confirmButton = { Button(onClick = { exitApplication() }) { Text("OK") } },
+            )
+        }
+        return@application
+    }
 
     val logoPainter = remember {
         val stream = DesktopStateHolder::class.java.classLoader.getResourceAsStream("pnifox_logo.png")
@@ -209,6 +227,22 @@ fun main() = application {
 
                             Spacer(Modifier.weight(1f))
 
+                            OutlinedButton(
+                                onClick = { holder.openTelegramChannel() },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.Send, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = dtr("Telegram Channel", "کانال تلگرام"),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, modifier = Modifier.size(14.dp))
+                            }
+
                             val statusColor = when (state.tunnelState) {
                                 is TunnelState.Connected -> Color(0xFF10B981)
                                 is TunnelState.Connecting -> Color(0xFFF97316)
@@ -235,15 +269,25 @@ fun main() = application {
                                             fontWeight = FontWeight.Bold,
                                         )
                                     }
+                                    val modeText = if (app.activeSection == ActiveSectionEngine.MHR && state.persisted.mhrSettings.proxyOnly) {
+                                        dtr("MHR Proxy Only", "فقط پروکسی MHR")
+                                    } else {
+                                        if (app.language == AppLanguage.PERSIAN) state.persisted.windowsTunnelMode.labelFa else state.persisted.windowsTunnelMode.labelEn
+                                    }
                                     Text(
-                                        text = if (app.language == AppLanguage.PERSIAN) state.persisted.windowsTunnelMode.labelFa else state.persisted.windowsTunnelMode.labelEn,
+                                        text = modeText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                    val portLabel = if (app.activeSection == ActiveSectionEngine.MHR) {
+                                        "HTTP :${state.persisted.mhrSettings.listenPort}  SOCKS5 :${state.persisted.mhrSettings.socks5Port}"
+                                    } else {
+                                        "SOCKS5 :${state.persisted.aetherSettings.localSocksPort}  HTTP :${app.httpProxyPort}"
+                                    }
                                     Text(
-                                        text = "SOCKS5 :${state.persisted.aetherSettings.localSocksPort}  HTTP :${app.httpProxyPort}",
+                                        text = portLabel,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
@@ -337,7 +381,7 @@ fun main() = application {
                     confirmButton = {
                         Button(onClick = {
                             holder.markTelegramPromptSeen()
-                            runCatching { Desktop.getDesktop().browse(URI(url)) }
+                            holder.openTelegramChannel()
                         }) { Text(dtr("Join Channel", "عضویت در کانال")) }
                     },
                     dismissButton = {
@@ -355,7 +399,7 @@ fun main() = application {
                     confirmButton = {
                         Button(onClick = {
                             holder.dismissStartupUpdate(null)
-                            runCatching { Desktop.getDesktop().browse(URI(upd.releaseUrl)) }
+                            holder.openExternal(upd.releaseUrl)
                         }) { Text(dtr("Download", "دانلود")) }
                     },
                     dismissButton = {

@@ -83,7 +83,14 @@ class MhrEngineManager @Inject constructor(
         val dir = mhrDataDir()
         Native.setDataDir(dir.absolutePath)
 
-        val configJson = MhrConfigBuilder.buildConfigJson(appSettings, aetherSettings, mhrSettings)
+        val configJson = MhrConfigBuilder.buildConfigJson(
+            appSettings = appSettings,
+            aetherSettings = aetherSettings,
+            mhr = mhrSettings,
+            overrideSocks5Port = aetherSettings.localSocksPort,
+            overrideListenPort = if (appSettings.allowLan) appSettings.httpProxyPort else mhrSettings.listenPort,
+            overrideListenHost = if (appSettings.allowLan || mhrSettings.shareOnLan) "0.0.0.0" else "127.0.0.1",
+        )
         File(dir, "config.json").writeText(configJson)
 
         logs.append(

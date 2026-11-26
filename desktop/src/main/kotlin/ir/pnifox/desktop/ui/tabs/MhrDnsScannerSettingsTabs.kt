@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -84,8 +85,6 @@ import ir.pnifox.desktop.ui.DesktopSwitchRow
 import ir.pnifox.desktop.ui.DesktopUiState
 import ir.pnifox.desktop.ui.LocalDesktopLanguage
 import ir.pnifox.desktop.ui.dtr
-import java.awt.Desktop
-import java.net.URI
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -130,7 +129,7 @@ fun MhrDesktopTab(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { showImportDialog = true }, shape = RoundedCornerShape(10.dp)) {
                         Icon(Icons.Rounded.ContentPaste, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
@@ -145,10 +144,100 @@ fun MhrDesktopTab(
                         Spacer(Modifier.width(6.dp))
                         Text(dtr("Copy Share Link", "کپی لینک اشتراک"))
                     }
-                    Button(onClick = { holder.installMhrCaCert() }, shape = RoundedCornerShape(10.dp)) {
-                        Icon(Icons.Rounded.LockOpen, null, modifier = Modifier.size(16.dp))
+                    DesktopBadgePill(
+                        text = if (state.isMhrCaInstalled) dtr("MITM CA Installed ✓", "گواهی CA نصب است ✓") else dtr("CA Not Installed", "گواهی نصب نیست"),
+                        containerColor = if (state.isMhrCaInstalled) Color(0xFF10B981).copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (state.isMhrCaInstalled) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = { holder.installMhrCaCert() }, enabled = !state.isCaActionRunning, shape = RoundedCornerShape(10.dp)) {
+                        if (state.isCaActionRunning) CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Rounded.LockOpen, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(dtr("Install Windows CA Cert", "نصب گواهی CA ویندوز"))
+                        Text(dtr("Install CA Cert", "نصب گواهی CA"))
+                    }
+                    OutlinedButton(onClick = { holder.removeMhrCaCert() }, enabled = !state.isCaActionRunning, shape = RoundedCornerShape(10.dp)) {
+                        Icon(Icons.Rounded.DeleteOutline, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(6.dp))
+                        Text(dtr("Remove CA Cert", "حذف گواهی CA"), color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+
+        // MHR Proxy & Network Settings (HTTP + SOCKS5 ports, Proxy Only vs System Proxy, Share on LAN)
+        item {
+            DesktopCard {
+                Text(dtr("MHR Proxy & Network Settings", "پروکسی و تنظیمات شبکه MHR"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = !mhr.proxyOnly,
+                        onClick = { holder.updateMhr { it.copy(proxyOnly = false) } },
+                        label = { Text(dtr("System Proxy / TUN + Speed Meter", "پروکسی سیستم / TUN + نمایش سرعت")) },
+                    )
+                    FilterChip(
+                        selected = mhr.proxyOnly,
+                        onClick = { holder.updateMhr { it.copy(proxyOnly = true) } },
+                        label = { Text(dtr("Proxy Only (Manual HTTP & SOCKS5)", "فقط پروکسی (تنظیم دستی مرورگر/تلگرام)")) },
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = mhr.listenPort.toString(),
+                        onValueChange = { txt ->
+                            txt.filter(Char::isDigit).toIntOrNull()?.let { p ->
+                                holder.updateMhr { it.copy(listenPort = p.coerceIn(1024, 65535)) }
+                            }
+                        },
+                        label = { Text(dtr("HTTP Proxy Port", "پورت پروکسی HTTP")) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = mhr.socks5Port.toString(),
+                        onValueChange = { txt ->
+                            txt.filter(Char::isDigit).toIntOrNull()?.let { p ->
+                                holder.updateMhr { it.copy(socks5Port = p.coerceIn(1024, 65535)) }
+                            }
+                        },
+                        label = { Text(dtr("SOCKS5 Proxy Port", "پورت پروکسی SOCKS5")) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (mhr.listenPort == mhr.socks5Port) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = dtr("HTTP and SOCKS5 ports differ automatically if equal; pick distinct ports (e.g. 8085 & 8086).", "پورت HTTP و SOCKS5 باید متفاوت باشند (مثلاً 8085 و 8086)."),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                DesktopSwitchRow(
+                    title = dtr("Share MHR proxy with other devices on my Wi-Fi / network", "اشتراک‌گذاری پروکسی MHR با گوشی/آیفون روی همین شبکه وای‌فای"),
+                    subtitle = dtr("Binds MHR HTTP/SOCKS5 on 0.0.0.0 when ON; strictly 127.0.0.1 (safer) when OFF.", "در صورت روشن بودن روی 0.0.0.0 باز می‌شود؛ در حالت خاموش فقط روی localhost امن باقی می‌ماند."),
+                    checked = mhr.shareOnLan,
+                    onCheckedChange = { c -> holder.updateMhr { it.copy(shareOnLan = c) } },
+                )
+                val lanIp = state.lanIps.firstOrNull() ?: "127.0.0.1"
+                val displayHost = if (mhr.shareOnLan || state.persisted.appSettings.allowLan) lanIp else "127.0.0.1"
+                val httpAddr = "$displayHost:${mhr.listenPort}"
+                val socksAddr = "$displayHost:${mhr.socks5Port}"
+                val httpCopied = dtr("Copied HTTP proxy $httpAddr", "پروکسی HTTP کپی شد: $httpAddr")
+                val socksCopied = dtr("Copied SOCKS5 proxy $socksAddr", "پروکسی SOCKS5 کپی شد: $socksAddr")
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(httpAddr)); holder.setBanner(httpCopied) }, shape = RoundedCornerShape(10.dp)) {
+                        Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("HTTP: $httpAddr")
+                    }
+                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(socksAddr)); holder.setBanner(socksCopied) }, shape = RoundedCornerShape(10.dp)) {
+                        Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("SOCKS5: $socksAddr")
                     }
                 }
             }
@@ -684,9 +773,7 @@ fun SettingsDesktopTab(
                         Spacer(Modifier.width(6.dp))
                         Text(dtr("Check Updates", "بررسی آپدیت"))
                     }
-                    OutlinedButton(onClick = {
-                        runCatching { Desktop.getDesktop().browse(URI(app.telegramUrl.ifBlank { "https://t.me/otaqe_pni" })) }
-                    }, shape = RoundedCornerShape(10.dp)) {
+                    OutlinedButton(onClick = { holder.openTelegramChannel() }, shape = RoundedCornerShape(10.dp)) {
                         Icon(Icons.AutoMirrored.Rounded.Send, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("@otaqe_pni")
@@ -697,12 +784,32 @@ fun SettingsDesktopTab(
                 val avail = state.updateState as? UpdateCheckState.UpdateAvailable
                 if (avail != null) {
                     Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { runCatching { Desktop.getDesktop().browse(URI(avail.info.releaseUrl)) } }) {
+                    OutlinedButton(onClick = { holder.openExternal(avail.info.releaseUrl) }) {
                         Icon(Icons.Rounded.Download, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text(dtr("Open Release ${avail.info.latestTag}", "باز کردن صفحه دانلود ${avail.info.latestTag}"))
                     }
                 }
+            }
+        }
+
+        // Security Protection Summary Card
+        item {
+            DesktopCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Lock, null, tint = Color(0xFF10B981))
+                    Spacer(Modifier.width(8.dp))
+                    Text(dtr("Security & Privacy Protection", "تضمین امنیت و حریم خصوصی"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = dtr(
+                        "• User-only NTFS ACLs on %APPDATA%\\pnifox\n• Zero-byte wipe of temporary configs on disconnect\n• Strict 127.0.0.1 bind unless Allow LAN is explicitly enabled\n• Random per-session Bearer secret on internal Clash API\n• Secret redaction in Live Core Logs & strict TLS verification",
+                        "• محدودسازی دسترسی پوشه %APPDATA%\\pnifox فقط به کاربر فعلی ویندوز\n• پاکسازی امن فایل‌های موقت تنظیمات هنگام قطع اتصال\n• باز نشدن پورت روی شبکه مگر با روشن کردن صریح Allow LAN\n• توکن تصادفی هر نشست برای کنترلر داخلی\n• سانسور خودکار کلیدها و پسوردها در کنسول لاگ",
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 

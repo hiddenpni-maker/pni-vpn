@@ -21,12 +21,14 @@ import ir.pnifox.core.model.UpdateCheckState
 import ir.pnifox.core.network.AppUpdateChecker
 import ir.pnifox.core.network.MhrShareCodec
 import ir.pnifox.core.network.ShareLinkParser
-import ir.pnifox.core.network.SubscriptionClient
 import ir.pnifox.core.vpn.JvmScanCandidateResult
+import ir.pnifox.core.vpn.JvmScanProgress
 import ir.pnifox.core.vpn.LanNetworkHelper
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.RealDelaySocketProber
 import ir.pnifox.desktop.core.WindowsPrivilegeHelper
+import ir.pnifox.desktop.core.WindowsSecurityHelper
+import ir.pnifox.desktop.core.WindowsSubscriptionFetcher
 import ir.pnifox.desktop.core.WindowsVpnController
 import ir.pnifox.desktop.model.DesktopPersistedState
 import ir.pnifox.desktop.model.DesktopTab
@@ -44,6 +46,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -56,10 +59,13 @@ data class DesktopUiState(
     val sessionRxBytes: Long = 0L,
     val sessionTxBytes: Long = 0L,
     val isAdmin: Boolean = false,
+    val isMhrCaInstalled: Boolean = false,
+    val isCaActionRunning: Boolean = false,
     val binaries: List<WindowsBinaryStatus> = emptyList(),
     val logs: List<LogEntry> = emptyList(),
     val statusBanner: String? = null,
     val isRegisteringWarp: Boolean = false,
+    val isSyncingSubs: Boolean = false,
     val isTestingPing: Boolean = false,
     val isTestingAllServers: Boolean = false,
     val isScanning: Boolean = false,
@@ -81,6 +87,8 @@ private data class RuntimeUiFlags(
     val selectedTab: DesktopTab = DesktopTab.AETHER,
     val statusBanner: String? = null,
     val isRegisteringWarp: Boolean = false,
+    val isSyncingSubs: Boolean = false,
+    val isCaActionRunning: Boolean = false,
     val isTestingPing: Boolean = false,
     val isTestingAllServers: Boolean = false,
     val isScanning: Boolean = false,
@@ -104,7 +112,7 @@ class DesktopStateHolder {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val httpClient = OkHttpClient.Builder().connectTimeout(12, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
-    private val subscriptionClient = SubscriptionClient(httpClient)
+    private val subscriptionFetcher = WindowsSubscriptionFetcher(httpClient, logs)
     private val updateChecker = AppUpdateChecker()
 
     private val flags = MutableStateFlow(RuntimeUiFlags(lanIps = LanNetworkHelper.detectLocalIpv4Addresses()))
@@ -120,7 +128,8 @@ class DesktopStateHolder {
     private val envFlow = combine(
         controller.isAdmin,
         controller.binaries,
-    ) { admin, bins -> admin to bins }
+        controller.isMhrCaInstalled,
+    ) { admin, bins, caInstalled -> Triple(admin, bins, caInstalled) }
 
     val uiState: StateFlow<DesktopUiState> = combine(
         flags,
@@ -136,7 +145,7 @@ class DesktopStateHolder {
         @Suppress("UNCHECKED_CAST")
         val traffic = values[3] as List<Long>
         @Suppress("UNCHECKED_CAST")
-        val env = values[4] as Pair<Boolean, List<WindowsBinaryStatus>>
+        val env = values[4] as Triple<Boolean, List<WindowsBinaryStatus>, Boolean>
         @Suppress("UNCHECKED_CAST")
         val logList = values[5] as List<LogEntry>
 
@@ -150,9 +159,12 @@ class DesktopStateHolder {
             sessionTxBytes = traffic[3],
             isAdmin = env.first,
             binaries = env.second,
+            isMhrCaInstalled = env.third,
+            isCaActionRunning = f.isCaActionRunning,
             logs = logList,
             statusBanner = f.statusBanner,
             isRegisteringWarp = f.isRegisteringWarp,
+            isSyncingSubs = f.isSyncingSubs,
             isTestingPing = f.isTestingPing,
             isTestingAllServers = f.isTestingAllServers,
             isScanning = f.isScanning,
@@ -233,46 +245,102 @@ class DesktopStateHolder {
         }
     }
 
+    fun clearAetherCache() {
+        controller.clearAetherCache()
+            .onSuccess { setBanner("Cleared AETHER Psiphon & Tor caches.") }
+            .onFailure { setBanner("Cache cleanup error: ${it.message}") }
+    }
+
     fun importServerConfigs(rawText: String) {
-        val parsed = ShareLinkParser.parseBatch(rawText)
-        if (parsed.isEmpty()) {
-            setBanner("No valid URI, Base64, or Xray/MASQUE JSON config found.")
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty()) {
+            setBanner("Paste config URI, Base64, JSON, Clash YAML, or https:// subscription link.")
             return
         }
-        store.saveProfiles(parsed)
-        if (store.stateFlow.value.appSettings.activeProfileId == null) {
-            store.updateAppSettings { it.copy(activeProfileId = parsed.first().id) }
+        val parsed = ShareLinkParser.parseBatch(trimmed)
+        if (parsed.isNotEmpty()) {
+            store.saveProfiles(parsed)
+            if (store.stateFlow.value.appSettings.activeProfileId == null) {
+                store.updateAppSettings { it.copy(activeProfileId = parsed.first().id) }
+            }
+            setBanner("Imported ${parsed.size} server profile(s).")
+            return
         }
-        setBanner("Imported ${parsed.size} server profile(s).")
+
+        // If user pasted subscription URL(s) in the Import box, automatically subscribe & sync!
+        val urls = trimmed.lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            .toList()
+        if (urls.isNotEmpty()) {
+            urls.forEachIndexed { idx, u ->
+                addSubscription("Sub ${store.stateFlow.value.subscriptions.size + idx + 1}", u)
+            }
+            return
+        }
+
+        setBanner("No valid URI, Base64, Clash YAML, or Xray/Sing-box/MASQUE JSON found.")
     }
 
     fun addSubscription(name: String, url: String) {
         val clean = url.trim()
-        if (!clean.startsWith("http")) {
+        if (!clean.startsWith("http://", ignoreCase = true) && !clean.startsWith("https://", ignoreCase = true)) {
             setBanner("Subscription URL must start with http:// or https://")
             return
         }
         scope.launch {
-            val sub = SubscriptionGroup(
+            val existing = store.stateFlow.value.subscriptions.firstOrNull { it.url.equals(clean, ignoreCase = true) }
+            val sub = existing ?: SubscriptionGroup(
                 id = UUID.randomUUID().toString(),
-                name = name.ifBlank { "Subscription" },
+                name = name.trim().ifBlank { "Subscription ${store.stateFlow.value.subscriptions.size + 1}" },
                 url = clean,
                 lastUpdatedEpochMs = System.currentTimeMillis(),
             )
             store.saveSubscription(sub)
+            flags.value = flags.value.copy(isSyncingSubs = true, statusBanner = "Fetching '${sub.name}'...")
             syncSubscription(sub)
+            flags.value = flags.value.copy(isSyncingSubs = false)
         }
     }
 
-    fun refreshAllSubscriptions() {
+    fun syncSingleSubscription(sub: SubscriptionGroup) {
+        if (flags.value.isSyncingSubs) return
         scope.launch {
-            store.stateFlow.value.subscriptions.forEach { syncSubscription(it) }
+            flags.value = flags.value.copy(isSyncingSubs = true, statusBanner = "Syncing '${sub.name}'...")
+            syncSubscription(sub)
+            flags.value = flags.value.copy(isSyncingSubs = false)
+        }
+    }
+
+    fun deleteSubscription(subId: String) {
+        store.deleteSubscription(subId)
+        setBanner("Subscription removed.")
+    }
+
+    fun refreshAllSubscriptions() {
+        val subs = store.stateFlow.value.subscriptions
+        if (subs.isEmpty()) {
+            setBanner("No subscriptions added yet — click 'Add Subscription' first.")
+            return
+        }
+        if (flags.value.isSyncingSubs) return
+        scope.launch {
+            flags.value = flags.value.copy(isSyncingSubs = true, statusBanner = "Syncing ${subs.size} subscription(s)...")
+            subs.forEach { syncSubscription(it) }
+            flags.value = flags.value.copy(isSyncingSubs = false)
         }
     }
 
     private suspend fun syncSubscription(sub: SubscriptionGroup) {
-        subscriptionClient.fetchSubscriptionProfiles(sub.url, sub.id)
-            .onSuccess { list ->
+        val (httpPort, socksPort) = controller.activeProxyPorts()
+        subscriptionFetcher.fetch(
+            url = sub.url,
+            groupId = sub.id,
+            activeHttpPort = httpPort,
+            activeSocksPort = socksPort,
+        )
+            .onSuccess { outcome ->
+                val list = outcome.profiles
                 if (list.isNotEmpty()) {
                     store.deleteGroupProfiles(sub.id)
                     store.saveProfiles(list)
@@ -280,10 +348,20 @@ class DesktopStateHolder {
                     if (store.stateFlow.value.appSettings.activeProfileId == null) {
                         store.updateAppSettings { it.copy(activeProfileId = list.first().id) }
                     }
-                    setBanner("Synced '${sub.name}': ${list.size} servers.")
+                    setBanner("Synced '${sub.name}': ${list.size} server(s) via ${outcome.transportUsed} ✓")
+                } else {
+                    setBanner("'${sub.name}' returned 0 valid servers.")
                 }
             }
-            .onFailure { setBanner("Subscription sync failed: ${it.message}") }
+            .onFailure { err ->
+                logs.append("Sub", LogLevel.ERROR, "Subscription '${sub.name}' failed: ${err.message}")
+                val hint = if (httpPort == null && socksPort == null) {
+                    " (Tip: Connect AETHER/MHR first or retry)"
+                } else {
+                    ""
+                }
+                setBanner("Subscription '${sub.name}' failed: ${err.message}$hint")
+            }
     }
 
     fun selectProfile(p: ProxyProfile) = store.updateAppSettings { it.copy(activeProfileId = p.id) }
@@ -360,8 +438,8 @@ class DesktopStateHolder {
 
     private suspend fun measureSingleProfileHttpDelay(profile: ProxyProfile): Int? {
         val freePort = runCatching { java.net.ServerSocket(0).use { it.localPort } }.getOrDefault(10845)
-        val app = store.stateFlow.value.appSettings
-        val tmpCfg = java.io.File(store.runtimeDir, "ping-${System.nanoTime()}.json")
+        val app = store.stateFlow.value.appSettings.copy(allowLan = false)
+        val tmpCfg = File(store.runtimeDir, "ping-${System.nanoTime()}.json")
         val isRawJson = profile.rawUri.trimStart().startsWith("{")
         val isSb = !isRawJson && (profile.protocol == ProxyProtocol.HYSTERIA2 || profile.protocol == ProxyProtocol.WIREGUARD)
         val bin = controller.coreLocator.binaryFile(if (isSb) "sing-box.exe" else "xray.exe")
@@ -383,7 +461,16 @@ class DesktopStateHolder {
             val deadline = System.currentTimeMillis() + 3000L
             var ready = false
             while (System.currentTimeMillis() < deadline && proc.isAlive) {
-                val up = runCatching { java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", freePort), 250) }; true }.getOrDefault(false)
+                val up = runCatching {
+                    java.net.Socket().use { s ->
+                        s.soTimeout = 300
+                        s.connect(java.net.InetSocketAddress("127.0.0.1", freePort), 250)
+                        s.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00))
+                        s.getOutputStream().flush()
+                        val b0 = s.getInputStream().read()
+                        b0 == 0x05
+                    }
+                }.getOrDefault(false)
                 if (up) {
                     ready = true
                     break
@@ -394,7 +481,7 @@ class DesktopStateHolder {
             RealDelaySocketProber.probeHttp204ViaSocks5("127.0.0.1", freePort, timeoutMs = 4500)
         } finally {
             runCatching { proc?.destroyForcibly() }
-            runCatching { tmpCfg.delete() }
+            WindowsSecurityHelper.secureWipeAndDelete(tmpCfg)
         }
     }
 
@@ -450,10 +537,22 @@ class DesktopStateHolder {
     }
 
     fun installMhrCaCert() {
+        if (flags.value.isCaActionRunning) return
         scope.launch {
+            flags.value = flags.value.copy(isCaActionRunning = true)
             controller.installMhrCaCert()
-                .onSuccess { msg -> setBanner(msg) }
-                .onFailure { err -> setBanner("CA install failed: ${err.message}") }
+                .onSuccess { msg -> flags.value = flags.value.copy(isCaActionRunning = false, statusBanner = msg) }
+                .onFailure { err -> flags.value = flags.value.copy(isCaActionRunning = false, statusBanner = "CA install failed: ${err.message}") }
+        }
+    }
+
+    fun removeMhrCaCert() {
+        if (flags.value.isCaActionRunning) return
+        scope.launch {
+            flags.value = flags.value.copy(isCaActionRunning = true)
+            controller.removeMhrCaCert()
+                .onSuccess { msg -> flags.value = flags.value.copy(isCaActionRunning = false, statusBanner = msg) }
+                .onFailure { err -> flags.value = flags.value.copy(isCaActionRunning = false, statusBanner = "CA removal note: ${err.message}") }
         }
     }
 
@@ -540,6 +639,19 @@ class DesktopStateHolder {
         flags.value = flags.value.copy(startupUpdateModal = null)
         if (!tag.isNullOrBlank()) {
             store.updateAppSettings { it.copy(lastDismissedUpdateTag = tag) }
+        }
+    }
+
+    fun openTelegramChannel() {
+        val url = store.stateFlow.value.appSettings.telegramUrl.ifBlank { "https://t.me/otaqe_pni" }
+        WindowsSecurityHelper.openExternalUrl(url).onFailure { err ->
+            setBanner("Open Telegram failed: ${err.message} ($url)")
+        }
+    }
+
+    fun openExternal(url: String) {
+        WindowsSecurityHelper.openExternalUrl(url).onFailure { err ->
+            setBanner("Could not open link: ${err.message}")
         }
     }
 

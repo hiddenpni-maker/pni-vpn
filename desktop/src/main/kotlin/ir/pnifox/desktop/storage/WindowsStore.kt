@@ -115,13 +115,35 @@ class WindowsStore(
         cur.copy(warpKeys = next)
     }
 
-    fun recordTrafficDelta(rxDelta: Long, txDelta: Long) {
-        if (rxDelta <= 0L && txDelta <= 0L) return
-        update { cur ->
-            cur.copy(
+    private var pendingTrafficBytes = 0L
+
+    fun recordTrafficDelta(rxDelta: Long, txDelta: Long, flushNow: Boolean = false) {
+        if (rxDelta <= 0L && txDelta <= 0L && !flushNow) return
+        synchronized(lock) {
+            val cur = _stateFlow.value
+            val updated = cur.copy(
                 totalRxBytes = cur.totalRxBytes + rxDelta.coerceAtLeast(0L),
                 totalTxBytes = cur.totalTxBytes + txDelta.coerceAtLeast(0L),
             )
+            _stateFlow.value = updated
+            pendingTrafficBytes += (rxDelta.coerceAtLeast(0L) + txDelta.coerceAtLeast(0L))
+            if (flushNow || pendingTrafficBytes >= 65_536L) {
+                pendingTrafficBytes = 0L
+                runCatching {
+                    dataDir.mkdirs()
+                    stateFile.writeText(json.encodeToString(updated), Charsets.UTF_8)
+                }
+            }
+        }
+    }
+
+    fun flushState() {
+        synchronized(lock) {
+            pendingTrafficBytes = 0L
+            runCatching {
+                dataDir.mkdirs()
+                stateFile.writeText(json.encodeToString(_stateFlow.value), Charsets.UTF_8)
+            }
         }
     }
 

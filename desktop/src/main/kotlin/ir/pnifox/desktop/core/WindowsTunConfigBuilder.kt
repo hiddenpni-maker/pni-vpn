@@ -13,16 +13,19 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * Generates a Windows `sing-box` 1.14+ Wintun bridge configuration that captures system-wide
- * Windows IPv4 traffic via `wintun.dll` and forwards it through the active local SOCKS5 core
- * (`127.0.0.1:10820`), bypassing active server/relay IPs & optional Iran/LAN rulesets to prevent routing loops.
+ * Generates Windows `sing-box` 1.14+ configurations for both:
+ * 1. Full VPN / Wintun Layer-3 TUN (`buildTunBridgeConfig`)
+ * 2. Local System Proxy Dual-Stack Gateway (`buildSystemGatewayConfig`)
+ * Both expose authenticated Clash API (`/traffic`) on `127.0.0.1:clashApiPort` so download/upload
+ * speeds, totals, AdBlock, and Iran whitelist rulesets work identically across all engines & modes.
  */
 object WindowsTunConfigBuilder {
 
     fun buildTunBridgeConfig(
         appSettings: AppSettings,
-        socksPort: Int = 10820,
+        socksPort: Int = 10818,
         clashApiPort: Int = 19090,
+        clashSecret: String = "",
         bypassTargetIps: List<String> = emptyList(),
     ): String {
         val excludeCidrs = linkedSetOf<String>()
@@ -39,8 +42,89 @@ object WindowsTunConfigBuilder {
             excludeCidrs += "$ip/32"
         }
 
-        val routeRules = buildRouteRules(appSettings, bypassTargetIps)
+        val routeRules = buildRouteRules(appSettings, bypassTargetIps, isTunMode = true)
+        val inbounds = buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("type", "tun")
+                    put("tag", "tun-in")
+                    put("interface_name", "pnifox-tun")
+                    putJsonArray("address") {
+                        add(JsonPrimitive("172.19.0.1/30"))
+                    }
+                    put("mtu", appSettings.mtu.coerceIn(1280, 1500))
+                    put("auto_route", true)
+                    put("strict_route", false)
+                    put("stack", "gvisor")
+                    if (excludeCidrs.isNotEmpty()) {
+                        putJsonArray("route_exclude_address") {
+                            excludeCidrs.forEach { add(JsonPrimitive(it)) }
+                        }
+                    }
+                },
+            )
+        }
+        return assembleConfig(
+            appSettings = appSettings,
+            upstreamSocksPort = socksPort,
+            clashApiPort = clashApiPort,
+            clashSecret = clashSecret,
+            inbounds = inbounds,
+            routeRules = routeRules,
+            isTunMode = true,
+        )
+    }
 
+    fun buildSystemGatewayConfig(
+        appSettings: AppSettings,
+        socksListenPort: Int = 10820,
+        httpListenPort: Int = 10821,
+        upstreamSocksPort: Int = 10818,
+        clashApiPort: Int = 19090,
+        clashSecret: String = "",
+        bypassTargetIps: List<String> = emptyList(),
+    ): String {
+        val listenAddr = if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1"
+        val safeHttpPort = if (httpListenPort == socksListenPort) socksListenPort + 1 else httpListenPort
+        val routeRules = buildRouteRules(appSettings, bypassTargetIps, isTunMode = false)
+        val inbounds = buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("type", "socks")
+                    put("tag", "socks-in")
+                    put("listen", listenAddr)
+                    put("listen_port", socksListenPort)
+                },
+            )
+            add(
+                buildJsonObject {
+                    put("type", "http")
+                    put("tag", "http-in")
+                    put("listen", listenAddr)
+                    put("listen_port", safeHttpPort)
+                },
+            )
+        }
+        return assembleConfig(
+            appSettings = appSettings,
+            upstreamSocksPort = upstreamSocksPort,
+            clashApiPort = clashApiPort,
+            clashSecret = clashSecret,
+            inbounds = inbounds,
+            routeRules = routeRules,
+            isTunMode = false,
+        )
+    }
+
+    private fun assembleConfig(
+        appSettings: AppSettings,
+        upstreamSocksPort: Int,
+        clashApiPort: Int,
+        clashSecret: String,
+        inbounds: JsonArray,
+        routeRules: List<JsonObject>,
+        isTunMode: Boolean,
+    ): String {
         val root = buildJsonObject {
             putJsonObject("log") {
                 put("level", "info")
@@ -48,6 +132,9 @@ object WindowsTunConfigBuilder {
             putJsonObject("experimental") {
                 putJsonObject("clash_api") {
                     put("external_controller", "127.0.0.1:$clashApiPort")
+                    if (clashSecret.isNotBlank()) {
+                        put("secret", clashSecret)
+                    }
                 }
             }
             putJsonObject("dns") {
@@ -70,32 +157,14 @@ object WindowsTunConfigBuilder {
                 }
                 put("final", "dns-remote")
             }
-            putJsonArray("inbounds") {
-                add(
-                    buildJsonObject {
-                        put("type", "tun")
-                        put("tag", "tun-in")
-                        put("interface_name", "pnifox-tun")
-                        putJsonArray("address") { add(JsonPrimitive("172.19.0.1/30")) }
-                        put("mtu", appSettings.mtu.coerceIn(1280, 1500))
-                        put("auto_route", true)
-                        put("strict_route", false)
-                        put("stack", "gvisor")
-                        if (excludeCidrs.isNotEmpty()) {
-                            putJsonArray("route_exclude_address") {
-                                excludeCidrs.forEach { add(JsonPrimitive(it)) }
-                            }
-                        }
-                    },
-                )
-            }
+            put("inbounds", inbounds)
             putJsonArray("outbounds") {
                 add(
                     buildJsonObject {
                         put("type", "socks")
                         put("tag", "socks-out")
                         put("server", "127.0.0.1")
-                        put("server_port", socksPort)
+                        put("server_port", upstreamSocksPort)
                     },
                 )
                 add(
@@ -106,7 +175,9 @@ object WindowsTunConfigBuilder {
                 )
             }
             putJsonObject("route") {
-                put("auto_detect_interface", true)
+                if (isTunMode) {
+                    put("auto_detect_interface", true)
+                }
                 put("default_domain_resolver", "dns-direct")
                 put("rules", JsonArray(routeRules))
                 put("final", "socks-out")
@@ -118,10 +189,13 @@ object WindowsTunConfigBuilder {
     private fun buildRouteRules(
         appSettings: AppSettings,
         bypassTargetIps: List<String>,
+        isTunMode: Boolean,
     ): List<JsonObject> {
         val rules = mutableListOf<JsonObject>()
         rules += buildJsonObject { put("action", "sniff") }
-        rules += buildJsonObject { put("protocol", "dns"); put("action", "hijack-dns") }
+        if (isTunMode) {
+            rules += buildJsonObject { put("protocol", "dns"); put("action", "hijack-dns") }
+        }
 
         val processBypass = listOf(
             "aether.exe",

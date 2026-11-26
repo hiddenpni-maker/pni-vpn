@@ -213,13 +213,35 @@ class AetherArgBuilderTest {
                 scriptIds = listOf("https://script.google.com/macros/s/AKfycbxSample/exec"),
                 authKey = "k1",
                 googleIp = "216.239.38.120",
+                listenPort = 8085,
+                socks5Port = 8086,
             ),
         )
         assertTrue(mhrJson.contains("\"mode\":\"apps_script\""))
         assertTrue(mhrJson.contains("\"AKfycbxSample\""))
         assertTrue(mhrJson.contains("\"listen_host\":\"0.0.0.0\""))
-        assertTrue(mhrJson.contains("\"listen_port\":10821"))
-        assertTrue(mhrJson.contains("\"socks5_port\":10820"))
+        assertTrue(mhrJson.contains("\"listen_port\":8085"))
+        assertTrue(mhrJson.contains("\"socks5_port\":8086"))
+
+        val mhrAndroidJson = MhrConfigBuilder.buildConfigJson(
+            appSettings = lanSettings,
+            aetherSettings = AetherSettings(localSocksPort = 10820),
+            mhr = ir.pnifox.core.model.MhrSettings(scriptIds = listOf("AKfycbxSample")),
+            overrideSocks5Port = 10820,
+            overrideListenPort = 10821,
+        )
+        assertTrue(mhrAndroidJson.contains("\"listen_port\":10821"))
+        assertTrue(mhrAndroidJson.contains("\"socks5_port\":10820"))
+
+        val psiphonHttpArgs = builder.buildRunArgs(
+            appSettings = AppSettings(activePreset = OneTapPreset.WARP_TO_PSIPHON, exitNode = ExitNode.PSIPHON, httpProxyPort = 10821),
+            aether = AetherSettings(psiphonEnabled = true, localSocksPort = 10820),
+            nativeDir = "/data/app/lib/arm64",
+            workDir = File("/data/local/aether"),
+            exposeLocalHttpProxy = true,
+        )
+        assertTrue(psiphonHttpArgs.contains("--psiphon-http"))
+        assertTrue(!psiphonHttpArgs.contains("--http-proxy"))
 
         val sniProbe = MhrConfigBuilder.parseTestSniJson("www.google.com", """{"ok":true,"latencyMs":87}""")
         assertTrue(sniProbe.ok && sniProbe.latencyMs == 87L)

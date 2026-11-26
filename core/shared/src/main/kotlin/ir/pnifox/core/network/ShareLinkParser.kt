@@ -7,7 +7,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
@@ -18,50 +17,103 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * Parses real proxy URIs (`vless://`, `vmess://`, `trojan://`, `ss://`, `hy2://`, `wg://`),
- * Base64 subscription payloads, and full Xray/MASQUE JSON config objects into [ProxyProfile].
+ * Base64 / `sub://` subscription payloads, Clash/Mihomo YAML (`proxies:`), Sing-box JSON,
+ * and full Xray/MASQUE JSON config objects into [ProxyProfile].
  */
 object ShareLinkParser {
 
     private val json = Json { ignoreUnknownKeys = true }
+    private val proxySchemes = listOf(
+        "vless://",
+        "vmess://",
+        "trojan://",
+        "ss://",
+        "hy2://",
+        "hysteria2://",
+        "wg://",
+        "wireguard://",
+    )
 
-    fun parseBatch(rawInput: String, groupId: String = "manual"): List<ProxyProfile> {
-        val trimmed = rawInput.trim()
+    fun parseBatch(rawInput: String, groupId: String = "manual"): List<ProxyProfile> =
+        parseBatchInternal(rawInput, groupId, depth = 0)
+            .distinctBy { "${it.protocol}:${it.address}:${it.port}:${it.secret}:${it.name}" }
+
+    private fun parseBatchInternal(rawInput: String, groupId: String, depth: Int): List<ProxyProfile> {
+        if (depth > 3) return emptyList()
+        val trimmed = stripBomAndNoise(rawInput)
         if (trimmed.isEmpty()) return emptyList()
 
-        // 1. Direct full Xray JSON object or JSON array of configs
+        // 0. sub:// Base64 link wrapper
+        if (trimmed.startsWith("sub://", ignoreCase = true)) {
+            val inner = decodeBase64Safe(trimmed.substringAfter("sub://").substringBefore('#'))
+            if (!inner.isNullOrBlank()) {
+                val subParsed = parseBatchInternal(inner, groupId, depth + 1)
+                if (subParsed.isNotEmpty()) return subParsed
+            }
+        }
+
+        // 1. Direct full Xray / Sing-box JSON object or JSON array of configs
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             val fromJson = parseJsonBatch(trimmed, groupId)
             if (fromJson.isNotEmpty()) return fromJson
         }
 
-        // 2. Decode Base64 payload if no URI scheme present (could decode to JSON or URI lines)
-        val expanded = if (!trimmed.contains("://")) {
-            val decoded = decodeBase64Safe(trimmed)
-            if (!decoded.isNullOrBlank()) {
-                val decTrim = decoded.trim()
-                if (decTrim.startsWith("{") || decTrim.startsWith("[")) {
-                    val fromJson = parseJsonBatch(decTrim, groupId)
-                    if (fromJson.isNotEmpty()) return fromJson
-                }
-                decoded
-            } else {
-                trimmed
-            }
-        } else {
-            trimmed
+        // 2. Clash / Mihomo YAML subscription (`proxies:`)
+        if (looksLikeClashYaml(trimmed)) {
+            val fromYaml = parseClashYaml(trimmed, groupId)
+            if (fromYaml.isNotEmpty()) return fromYaml
         }
 
-        // 3. URI lines (plus optional inline JSON objects on lines)
-        val results = mutableListOf<ProxyProfile>()
-        expanded.lineSequence()
+        // 3. Direct URI lines / inline JSON objects (note: ignore comment lines when checking!)
+        val directResults = mutableListOf<ProxyProfile>()
+        val nonCommentLines = trimmed.lineSequence()
             .map { it.trim() }
-            .forEach { line ->
-                when {
-                    line.contains("://") -> parseSingle(line, groupId)?.let(results::add)
-                    line.startsWith("{") -> results += parseJsonBatch(line, groupId)
+            .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
+            .toList()
+
+        for (line in nonCommentLines) {
+            when {
+                hasProxyScheme(line) -> parseSingle(line, groupId)?.let(directResults::add)
+                line.startsWith("{") -> directResults += parseJsonBatch(line, groupId)
+            }
+        }
+        if (directResults.isNotEmpty()) return directResults
+
+        // 4. Base64-encoded subscription payload (handles header comments like `#profile-title`
+        //    even if a comment line contained `https://...`, and supports multi-line or double base64)
+        val candidateB64 = nonCommentLines
+            .filterNot { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            .joinToString("")
+        val decoded = decodeBase64Safe(candidateB64)
+        if (!decoded.isNullOrBlank() && decoded != trimmed) {
+            val nested = parseBatchInternal(decoded, groupId, depth + 1)
+            if (nested.isNotEmpty()) return nested
+        }
+
+        // 5. Fallback: scan individual Base64 lines
+        val b64LineResults = mutableListOf<ProxyProfile>()
+        for (line in nonCommentLines) {
+            if (line.length >= 24 && !line.contains("://")) {
+                val decLine = decodeBase64Safe(line)
+                if (!decLine.isNullOrBlank()) {
+                    b64LineResults += parseBatchInternal(decLine, groupId, depth + 1)
                 }
             }
-        return results
+        }
+        return b64LineResults
+    }
+
+    private fun stripBomAndNoise(input: String): String {
+        var s = input.replace("\uFEFF", "").trim()
+        if (s.startsWith("```") && s.endsWith("```") && s.length > 6) {
+            s = s.substringAfter('\n').substringBeforeLast("```").trim()
+        }
+        return s
+    }
+
+    private fun hasProxyScheme(line: String): Boolean {
+        val low = line.lowercase()
+        return proxySchemes.any { low.startsWith(it) }
     }
 
     private fun parseJsonBatch(rawJson: String, groupId: String): List<ProxyProfile> = runCatching {
@@ -76,16 +128,95 @@ object ShareLinkParser {
     }.getOrDefault(emptyList())
 
     private fun parseJsonElementProfiles(obj: JsonObject, groupId: String, now: Long): List<ProxyProfile> {
-        // Wrapper object containing configs/servers array
         for (wrapperKey in listOf("configs", "servers", "profiles")) {
             val nested = obj[wrapperKey] as? JsonArray
             if (nested != null) {
-                return nested.mapNotNull { el ->
-                    (el as? JsonObject)?.let { parseXrayJsonObject(it, groupId, now) }
+                return nested.flatMap { el ->
+                    (el as? JsonObject)?.let { parseJsonElementProfiles(it, groupId, now) } ?: emptyList()
                 }
             }
         }
+        val singBoxProfiles = parseSingBoxOutbounds(obj, groupId, now)
+        if (singBoxProfiles.isNotEmpty()) return singBoxProfiles
         return listOfNotNull(parseXrayJsonObject(obj, groupId, now))
+    }
+
+    private fun parseSingBoxOutbounds(obj: JsonObject, groupId: String, now: Long): List<ProxyProfile> {
+        val outbounds = (obj["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject }
+            ?: if (obj.containsKey("type") && obj.containsKey("server")) listOf(obj) else emptyList()
+        if (outbounds.isEmpty()) return emptyList()
+        // Distinguish Sing-box ("type") from Xray ("protocol")
+        if (outbounds.none { it["type"] != null && it["protocol"] == null }) return emptyList()
+
+        val skipTypes = setOf("direct", "block", "dns", "selector", "urltest", "url-test")
+        return outbounds.mapNotNull { ob ->
+            val type = ob["type"]?.jsonPrimitive?.content?.lowercase().orEmpty()
+            if (type.isBlank() || type in skipTypes) return@mapNotNull null
+            val server = ob["server"]?.jsonPrimitive?.content?.trim().orEmpty()
+            val port = ob["server_port"]?.jsonPrimitive?.intOrNull ?: 443
+            if (server.isBlank() || port !in 1..65535) return@mapNotNull null
+
+            val proto = when (type) {
+                "vless" -> ProxyProtocol.VLESS
+                "vmess" -> ProxyProtocol.VMESS
+                "trojan" -> ProxyProtocol.TROJAN
+                "shadowsocks" -> ProxyProtocol.SHADOWSOCKS
+                "hysteria2", "hy2" -> ProxyProtocol.HYSTERIA2
+                "wireguard" -> ProxyProtocol.WIREGUARD
+                "masque" -> ProxyProtocol.MASQUE
+                else -> return@mapNotNull null
+            }
+
+            val secret = when (proto) {
+                ProxyProtocol.SHADOWSOCKS -> {
+                    val m = ob["method"]?.jsonPrimitive?.content ?: "aes-256-gcm"
+                    val p = ob["password"]?.jsonPrimitive?.content.orEmpty()
+                    "$m:$p"
+                }
+                ProxyProtocol.WIREGUARD -> ob["private_key"]?.jsonPrimitive?.content.orEmpty()
+                else -> ob["uuid"]?.jsonPrimitive?.content
+                    ?: ob["password"]?.jsonPrimitive?.content
+                    ?: ""
+            }
+            val tlsObj = ob["tls"] as? JsonObject
+            val realityObj = tlsObj?.get("reality") as? JsonObject
+            val utlsObj = tlsObj?.get("utls") as? JsonObject
+            val transportObj = ob["transport"] as? JsonObject
+            val headersObj = transportObj?.get("headers") as? JsonObject
+            val sni = tlsObj?.get("server_name")?.jsonPrimitive?.content
+                ?: headersObj?.get("Host")?.jsonPrimitive?.content
+                ?: ""
+            val transport = transportObj?.get("type")?.jsonPrimitive?.content ?: "tcp"
+            val path = transportObj?.get("path")?.jsonPrimitive?.content
+                ?: transportObj?.get("service_name")?.jsonPrimitive?.content
+                ?: ""
+            val fp = utlsObj?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
+            val pbk = realityObj?.get("public_key")?.jsonPrimitive?.content
+                ?: ob["peer_public_key"]?.jsonPrimitive?.content
+                ?: ""
+            val sid = realityObj?.get("short_id")?.jsonPrimitive?.content.orEmpty()
+            val tag = ob["tag"]?.jsonPrimitive?.content?.trim()?.ifBlank { null }
+                ?: "${proto.displayName} • $server:$port"
+
+            val fingerprintId = "$groupId|$proto|$server|$port|$secret|$tag"
+            ProxyProfile(
+                id = UUID.nameUUIDFromBytes(fingerprintId.toByteArray()).toString(),
+                groupId = groupId,
+                name = tag,
+                protocol = proto,
+                address = server,
+                port = port,
+                secret = secret,
+                sni = sni,
+                transport = transport,
+                pathOrServiceName = path,
+                tlsFingerprint = fp,
+                realityPublicKey = pbk,
+                realityShortId = sid,
+                rawUri = "",
+                updatedAtEpochMs = now,
+            )
+        }
     }
 
     private fun parseXrayJsonObject(obj: JsonObject, groupId: String, now: Long): ProxyProfile? {
@@ -172,6 +303,180 @@ object ShareLinkParser {
         )
     }
 
+    private fun looksLikeClashYaml(text: String): Boolean =
+        text.contains("proxies:", ignoreCase = true) ||
+            (text.contains("server:", ignoreCase = true) && text.contains("type:", ignoreCase = true))
+
+    private fun parseClashYaml(yaml: String, groupId: String): List<ProxyProfile> {
+        val now = System.currentTimeMillis()
+        val lines = yaml.lines()
+        val results = mutableListOf<ProxyProfile>()
+        val inProxiesSection = lines.any { it.trim().startsWith("proxies:") }
+        var started = !inProxiesSection
+        var curMap: MutableMap<String, String>? = null
+
+        fun flushCur() {
+            val map = curMap ?: return
+            curMap = null
+            clashMapToProfile(map, groupId, now)?.let(results::add)
+        }
+
+        for (rawLine in lines) {
+            val commentStripped = rawLine.trimEnd()
+            val trimmed = commentStripped.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+            if (!started) {
+                if (trimmed.startsWith("proxies:")) started = true
+                continue
+            }
+            if (!rawLine.startsWith(" ") && !rawLine.startsWith("\t") && !trimmed.startsWith("-") &&
+                trimmed.endsWith(":") && !trimmed.startsWith("proxies:")
+            ) {
+                flushCur()
+                break
+            }
+            if (trimmed.startsWith("- {") || trimmed.startsWith("-{")) {
+                flushCur()
+                val inside = trimmed.substringAfter('{').substringBeforeLast('}')
+                val map = parseInlineClashObject(inside)
+                clashMapToProfile(map, groupId, now)?.let(results::add)
+                continue
+            }
+            if (trimmed.startsWith("- ")) {
+                flushCur()
+                curMap = linkedMapOf()
+                val rest = trimmed.removePrefix("- ").trim()
+                val colon = rest.indexOf(':')
+                if (colon > 0) {
+                    val k = rest.substring(0, colon).trim().lowercase()
+                    val v = rest.substring(colon + 1).trim().trim('"', '\'')
+                    curMap!![k] = v
+                }
+                continue
+            }
+            val map = curMap
+            if (map != null) {
+                val colon = trimmed.indexOf(':')
+                if (colon > 0) {
+                    val k = trimmed.substring(0, colon).trim().lowercase()
+                    val v = trimmed.substring(colon + 1).trim().trim('"', '\'')
+                    if (k.isNotBlank() && v.isNotBlank() && !v.startsWith("{")) {
+                        map[k] = v
+                    }
+                    if (k == "servername" || k == "sni" || k == "host" || k == "public-key" || k == "short-id" || k == "path" || k == "client-fingerprint") {
+                        map[k] = v
+                    }
+                    // Also handle nested flow map like ws-opts: {path: /ws, headers: {Host: foo}}
+                    if (k == "ws-opts" || k == "grpc-opts" || k == "reality-opts") {
+                        val inner = v.removeSurrounding("{", "}")
+                        parseInlineClashObject(inner).forEach { (ik, iv) ->
+                            map.putIfAbsent(ik, iv)
+                        }
+                    }
+                }
+            }
+        }
+        flushCur()
+        return results
+    }
+
+    private fun parseInlineClashObject(inside: String): MutableMap<String, String> {
+        val map = linkedMapOf<String, String>()
+        val tokens = mutableListOf<String>()
+        val cur = StringBuilder()
+        var braceDepth = 0
+        var inQuote = false
+        var quoteChar = '"'
+        for (ch in inside) {
+            when {
+                inQuote -> {
+                    cur.append(ch)
+                    if (ch == quoteChar) inQuote = false
+                }
+                ch == '"' || ch == '\'' -> {
+                    inQuote = true
+                    quoteChar = ch
+                    cur.append(ch)
+                }
+                ch == '{' || ch == '[' -> {
+                    braceDepth++
+                    cur.append(ch)
+                }
+                ch == '}' || ch == ']' -> {
+                    if (braceDepth > 0) braceDepth--
+                    cur.append(ch)
+                }
+                ch == ',' && braceDepth == 0 -> {
+                    tokens += cur.toString()
+                    cur.clear()
+                }
+                else -> cur.append(ch)
+            }
+        }
+        if (cur.isNotEmpty()) tokens += cur.toString()
+
+        for (tok in tokens) {
+            val colon = tok.indexOf(':')
+            if (colon <= 0) continue
+            val k = tok.substring(0, colon).trim().lowercase()
+            val vRaw = tok.substring(colon + 1).trim()
+            if (vRaw.startsWith("{") && vRaw.endsWith("}")) {
+                parseInlineClashObject(vRaw.removeSurrounding("{", "}")).forEach { (ik, iv) ->
+                    map.putIfAbsent(ik, iv)
+                }
+            } else {
+                map[k] = vRaw.trim('"', '\'', ' ')
+            }
+        }
+        return map
+    }
+
+    private fun clashMapToProfile(map: Map<String, String>, groupId: String, now: Long): ProxyProfile? {
+        val type = map["type"]?.lowercase() ?: return null
+        val protocol = when (type) {
+            "vless" -> ProxyProtocol.VLESS
+            "vmess" -> ProxyProtocol.VMESS
+            "trojan" -> ProxyProtocol.TROJAN
+            "ss", "shadowsocks" -> ProxyProtocol.SHADOWSOCKS
+            "hysteria2", "hy2" -> ProxyProtocol.HYSTERIA2
+            "wireguard" -> ProxyProtocol.WIREGUARD
+            else -> return null
+        }
+        val server = map["server"]?.trim().orEmpty()
+        val port = map["port"]?.toIntOrNull() ?: return null
+        if (server.isBlank() || port !in 1..65535) return null
+        val name = map["name"]?.trim()?.ifBlank { null } ?: "${protocol.displayName} • $server:$port"
+        val secret = when (protocol) {
+            ProxyProtocol.SHADOWSOCKS -> "${map["cipher"] ?: "aes-256-gcm"}:${map["password"].orEmpty()}"
+            ProxyProtocol.WIREGUARD -> map["private-key"].orEmpty()
+            else -> map["uuid"] ?: map["password"] ?: ""
+        }
+        val sni = map["servername"] ?: map["sni"] ?: map["host"] ?: ""
+        val net = map["network"] ?: "tcp"
+        val path = map["path"] ?: map["grpc-service-name"] ?: map["servicename"] ?: ""
+        val fp = map["client-fingerprint"] ?: map["fingerprint"] ?: "chrome"
+        val pbk = map["public-key"] ?: ""
+        val sid = map["short-id"] ?: ""
+        val idKey = "$groupId|$protocol|$server|$port|$secret|$name"
+        return ProxyProfile(
+            id = UUID.nameUUIDFromBytes(idKey.toByteArray()).toString(),
+            groupId = groupId,
+            name = name,
+            protocol = protocol,
+            address = server,
+            port = port,
+            secret = secret,
+            sni = sni,
+            transport = net,
+            pathOrServiceName = path,
+            tlsFingerprint = fp,
+            realityPublicKey = pbk,
+            realityShortId = sid,
+            rawUri = "",
+            updatedAtEpochMs = now,
+        )
+    }
+
     fun parseSingle(uriText: String, groupId: String = "manual"): ProxyProfile? {
         val raw = uriText.trim()
         val now = System.currentTimeMillis()
@@ -202,11 +507,40 @@ object ShareLinkParser {
         groupId: String,
         now: Long,
     ): ProxyProfile? = runCatching {
-        val parsed = URI(raw)
-        val host = parsed.host ?: return null
-        val port = if (parsed.port > 0) parsed.port else 443
-        val params = parseQueryParams(parsed.rawQuery)
-        val fragment = parsed.rawFragment?.let { decodeUrl(it) }.orEmpty()
+        // Parse resiliently without letting spaces/Unicode/pipes in `#fragment` break java.net.URI
+        val afterScheme = raw.substringAfter("://")
+        val rawFragment = afterScheme.substringAfter('#', "")
+        val withoutFragment = afterScheme.substringBefore('#')
+        val rawQuery = withoutFragment.substringAfter('?', "")
+        val authorityAndPath = withoutFragment.substringBefore('?')
+        val authority = authorityAndPath.substringBefore('/')
+
+        val atIdx = authority.lastIndexOf('@')
+        val userInfo = if (atIdx >= 0) decodeUrl(authority.substring(0, atIdx)) else ""
+        val hostPort = if (atIdx >= 0) authority.substring(atIdx + 1) else authority
+
+        val host: String
+        val port: Int
+        if (hostPort.startsWith("[")) {
+            val closeIdx = hostPort.indexOf(']')
+            if (closeIdx <= 1) return null
+            host = hostPort.substring(1, closeIdx).trim()
+            val afterBracket = hostPort.substring(closeIdx + 1)
+            port = afterBracket.removePrefix(":").toIntOrNull() ?: 443
+        } else {
+            val colonIdx = hostPort.lastIndexOf(':')
+            if (colonIdx > 0) {
+                host = hostPort.substring(0, colonIdx).trim()
+                port = hostPort.substring(colonIdx + 1).toIntOrNull() ?: 443
+            } else {
+                host = hostPort.trim()
+                port = 443
+            }
+        }
+        if (host.isBlank() || port !in 1..65535) return null
+
+        val params = parseQueryParams(rawQuery)
+        val fragment = decodeUrl(rawFragment).trim()
         val displayName = fragment.ifBlank { "${protocol.displayName} • $host:$port" }
 
         ProxyProfile(
@@ -216,7 +550,7 @@ object ShareLinkParser {
             protocol = protocol,
             address = host,
             port = port,
-            secret = parsed.userInfo.orEmpty(),
+            secret = userInfo,
             sni = params["sni"].orEmpty().ifBlank { params["host"].orEmpty() },
             transport = params["type"].orEmpty().ifBlank { "tcp" },
             pathOrServiceName = params["path"].orEmpty().ifBlank { params["serviceName"].orEmpty() },
@@ -229,12 +563,15 @@ object ShareLinkParser {
     }.getOrNull()
 
     private fun parseVmess(raw: String, groupId: String, now: Long): ProxyProfile? = runCatching {
-        val b64 = raw.substringAfter("vmess://").trim()
+        val b64 = raw.substringAfter("vmess://").substringBefore('#').trim()
         val jsonText = decodeBase64Safe(b64) ?: return null
         val obj = json.parseToJsonElement(jsonText).jsonObject
-        val address = obj["add"]?.jsonPrimitive?.content ?: return null
-        val port = obj["port"]?.jsonPrimitive?.content?.toIntOrNull() ?: 443
-        val ps = obj["ps"]?.jsonPrimitive?.content?.ifBlank { null } ?: "VMess • $address:$port"
+        val address = obj["add"]?.jsonPrimitive?.content?.trim() ?: return null
+        val port = obj["port"]?.jsonPrimitive?.intOrNull
+            ?: obj["port"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: 443
+        if (address.isBlank() || port !in 1..65535) return null
+        val ps = obj["ps"]?.jsonPrimitive?.content?.trim()?.ifBlank { null } ?: "VMess • $address:$port"
         ProxyProfile(
             id = UUID.nameUUIDFromBytes(raw.toByteArray()).toString(),
             groupId = groupId,
@@ -254,16 +591,32 @@ object ShareLinkParser {
     }.getOrNull()
 
     private fun parseShadowsocks(raw: String, groupId: String, now: Long): ProxyProfile? = runCatching {
-        val withoutScheme = raw.substringAfter("ss://")
-        val remark = withoutScheme.substringAfter("#", "").let { decodeUrl(it) }
-        val mainPart = withoutScheme.substringBefore("#")
+        val withoutScheme = raw.substringAfter("ss://").trim()
+        val remark = withoutScheme.substringAfter("#", "").let { decodeUrl(it) }.trim()
+        val mainRaw = withoutScheme.substringBefore("#").trim()
+
+        val mainPart = if (!mainRaw.contains('@')) {
+            // Legacy SIP001: ss://base64(method:password@host:port)#remark
+            val b64Only = mainRaw.substringBefore('?')
+            decodeBase64Safe(b64Only) ?: mainRaw
+        } else {
+            mainRaw
+        }
         val atIdx = mainPart.lastIndexOf('@')
         if (atIdx <= 0) return null
         val userPart = mainPart.substring(0, atIdx)
-        val hostPort = mainPart.substring(atIdx + 1).substringBefore('?')
-        val host = hostPort.substringBeforeLast(':')
+        val hostPort = mainPart.substring(atIdx + 1).substringBefore('?').substringBefore('/')
+        val host = if (hostPort.startsWith("[")) {
+            hostPort.substringAfter('[').substringBefore(']')
+        } else {
+            hostPort.substringBeforeLast(':')
+        }
         val port = hostPort.substringAfterLast(':').toIntOrNull() ?: 8388
-        val secret = decodeBase64Safe(userPart) ?: userPart
+        if (host.isBlank() || port !in 1..65535) return null
+
+        val decodedUser = decodeBase64Safe(userPart)
+        val secret = if (decodedUser != null && decodedUser.contains(':')) decodedUser else decodeUrl(userPart)
+
         ProxyProfile(
             id = UUID.nameUUIDFromBytes(raw.toByteArray()).toString(),
             groupId = groupId,
@@ -475,13 +828,18 @@ object ShareLinkParser {
 
     @OptIn(ExperimentalEncodingApi::class)
     private fun decodeBase64Safe(raw: String): String? = runCatching {
-        val cleaned = raw.trim().replace("\n", "").replace("\r", "")
+        val cleaned = raw.trim().replace("\n", "").replace("\r", "").replace(" ", "")
+        if (cleaned.length < 4) return null
         val urlSafe = cleaned.contains('-') || cleaned.contains('_')
         val decoder = if (urlSafe) Base64.UrlSafe else Base64.Default
-        val padded = cleaned.let { s ->
+        val unpadded = cleaned.trimEnd('=')
+        val padded = unpadded.let { s ->
             val rem = s.length % 4
             if (rem == 0) s else s + "=".repeat(4 - rem)
         }
-        decoder.decode(padded).decodeToString()
+        val bytes = decoder.decode(padded)
+        val str = bytes.decodeToString()
+        if (str.any { it.code < 0x09 }) return null
+        str
     }.getOrNull()
 }

@@ -30,10 +30,11 @@ object ConfigBuilders {
         socksPort: Int = 10820,
         errorLogPath: String? = null,
         hasGeoAssets: Boolean = true,
+        exposeLocalHttpProxy: Boolean = false,
     ): String {
         val rawTrim = profile.rawUri.trimStart()
         if (rawTrim.startsWith("{")) {
-            buildFromFullXrayJson(rawTrim, appSettings, socksPort, errorLogPath, hasGeoAssets)?.let { return it }
+            buildFromFullXrayJson(rawTrim, appSettings, socksPort, errorLogPath, hasGeoAssets, exposeLocalHttpProxy)?.let { return it }
         }
         val useFragment = profile.fragmentEnabled || appSettings.transportMode == TransportMode.FRAGMENT
         val targetHost = if (profile.spoofLocalhost40443) "127.0.0.1" else profile.address
@@ -75,7 +76,7 @@ object ConfigBuilders {
             put("dns", buildXrayDnsObject(appSettings, hasGeoAssets))
             putJsonArray("inbounds") {
                 add(buildSocksInbound(appSettings, socksPort))
-                if (appSettings.allowLan) {
+                if (appSettings.allowLan || exposeLocalHttpProxy) {
                     add(buildHttpInbound(appSettings))
                 }
             }
@@ -193,6 +194,7 @@ object ConfigBuilders {
         socksPort: Int,
         errorLogPath: String?,
         hasGeoAssets: Boolean,
+        exposeLocalHttpProxy: Boolean = false,
     ): String? = runCatching {
         val parsed = parserJson.parseToJsonElement(rawJson).jsonObject
         val origOutbounds = (parsed["outbounds"] as? JsonArray)
@@ -232,7 +234,7 @@ object ConfigBuilders {
             }
             putJsonArray("inbounds") {
                 add(buildSocksInbound(appSettings, socksPort))
-                if (appSettings.allowLan) {
+                if (appSettings.allowLan || exposeLocalHttpProxy) {
                     add(buildHttpInbound(appSettings))
                 }
             }
@@ -247,7 +249,7 @@ object ConfigBuilders {
 
     private fun buildHttpInbound(appSettings: AppSettings): JsonObject = buildJsonObject {
         put("tag", "http-in")
-        put("listen", "0.0.0.0")
+        put("listen", if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1")
         put("port", appSettings.httpProxyPort)
         put("protocol", "http")
         putJsonObject("settings") {
@@ -513,6 +515,7 @@ object ConfigBuilders {
         socksPort: Int = 10820,
         errorLogPath: String? = null,
         hasGeoAssets: Boolean = true,
+        exposeLocalHttpProxy: Boolean = false,
     ): String {
         val raw = dnsSettings.resolverAddress.trim().ifBlank { "1.1.1.1" }
         val formattedServer = when {
@@ -552,7 +555,7 @@ object ConfigBuilders {
             }
             putJsonArray("inbounds") {
                 add(buildSocksInbound(appSettings, socksPort))
-                if (appSettings.allowLan) {
+                if (appSettings.allowLan || exposeLocalHttpProxy) {
                     add(buildHttpInbound(appSettings))
                 }
             }
@@ -588,6 +591,7 @@ object ConfigBuilders {
         socksPort: Int = 10820,
         errorLogPath: String? = null,
         hasGeoAssets: Boolean = true,
+        exposeLocalHttpProxy: Boolean = false,
     ): String {
         val routedProfile = profile.copy(
             address = "127.0.0.1",
@@ -602,6 +606,7 @@ object ConfigBuilders {
             socksPort = socksPort,
             errorLogPath = errorLogPath,
             hasGeoAssets = hasGeoAssets,
+            exposeLocalHttpProxy = exposeLocalHttpProxy,
         )
     }
 
@@ -614,6 +619,7 @@ object ConfigBuilders {
         appSettings: AppSettings,
         innerDnsttPort: Int = 10823,
         socksPort: Int = 10820,
+        exposeLocalHttpProxy: Boolean = false,
     ): String {
         val outbound = buildJsonObject {
             put("type", "ssh")
@@ -625,10 +631,15 @@ object ConfigBuilders {
                 put("password", dnsSettings.sshPassword)
             }
         }
-        return assembleSingBoxJson(outbound, appSettings, socksPort)
+        return assembleSingBoxJson(outbound, appSettings, socksPort, exposeLocalHttpProxy)
     }
 
-    fun buildSingBoxConfig(profile: ProxyProfile, appSettings: AppSettings, socksPort: Int = 10820): String {
+    fun buildSingBoxConfig(
+        profile: ProxyProfile,
+        appSettings: AppSettings,
+        socksPort: Int = 10820,
+        exposeLocalHttpProxy: Boolean = false,
+    ): String {
         val outbound = when (profile.protocol) {
             ProxyProtocol.HYSTERIA2 -> buildJsonObject {
                 put("type", "hysteria2")
@@ -651,10 +662,15 @@ object ConfigBuilders {
                 putJsonArray("local_address") { add(JsonPrimitive("172.16.0.2/32")) }
             }
         }
-        return assembleSingBoxJson(outbound, appSettings, socksPort)
+        return assembleSingBoxJson(outbound, appSettings, socksPort, exposeLocalHttpProxy)
     }
 
-    private fun assembleSingBoxJson(outbound: JsonObject, appSettings: AppSettings, socksPort: Int): String {
+    private fun assembleSingBoxJson(
+        outbound: JsonObject,
+        appSettings: AppSettings,
+        socksPort: Int,
+        exposeLocalHttpProxy: Boolean = false,
+    ): String {
         val rules = buildSingBoxRouteRules(appSettings)
         val root = buildJsonObject {
             putJsonObject("log") { put("level", "info") }
@@ -667,12 +683,12 @@ object ConfigBuilders {
                         put("listen_port", socksPort)
                     },
                 )
-                if (appSettings.allowLan) {
+                if (appSettings.allowLan || exposeLocalHttpProxy) {
                     add(
                         buildJsonObject {
                             put("type", "http")
                             put("tag", "http-in")
-                            put("listen", "0.0.0.0")
+                            put("listen", if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1")
                             put("listen_port", appSettings.httpProxyPort)
                         },
                     )

@@ -26,7 +26,8 @@ android {
 }
 
 dependencies {
-    implementation(project(":core:model"))
+    api(project(":core:model"))
+    api(project(":core:shared"))
 
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)

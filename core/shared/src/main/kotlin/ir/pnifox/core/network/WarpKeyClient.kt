@@ -1,7 +1,8 @@
 package ir.pnifox.core.network
 
-import android.util.Base64
 import ir.pnifox.core.model.WarpKey
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -92,12 +93,13 @@ class WarpKeyClient @Inject constructor(
     }
 
     /** Generates 32-byte X25519 clamped scalar key material for API registration request. */
+    @OptIn(ExperimentalEncodingApi::class)
     private fun generateMockSafeCurvePlaceholder(): Pair<String, String> {
         val rng = SecureRandom()
         val priv = ByteArray(32).also { rng.nextBytes(it) }
         priv[0] = (priv[0].toInt() and 248).toByte()
         priv[31] = ((priv[31].toInt() and 127) or 64).toByte()
         val pub = ByteArray(32).also { rng.nextBytes(it) }
-        return Base64.encodeToString(priv, Base64.NO_WRAP) to Base64.encodeToString(pub, Base64.NO_WRAP)
+        return Base64.Default.encode(priv) to Base64.Default.encode(pub)
     }
 }

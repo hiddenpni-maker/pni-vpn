@@ -81,6 +81,7 @@ class AetherArgBuilder @Inject constructor() {
         workDir: File,
         psiphonServersDatPath: String? = null,
         routesFile: File? = null,
+        exposeLocalHttpProxy: Boolean = false,
     ): List<String> = buildList {
         add("--config")
         add(File(workDir, "aether.toml").absolutePath)
@@ -154,6 +155,10 @@ class AetherArgBuilder @Inject constructor() {
         } else {
             add("--bind")
             add("$publicBindHost:${aether.localSocksPort}")
+        }
+        if (exposeLocalHttpProxy) {
+            add("--http-proxy")
+            add("$publicBindHost:${appSettings.httpProxyPort}")
         }
 
         val effectiveProto = when (appSettings.activePreset) {

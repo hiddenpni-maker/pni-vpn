@@ -26,6 +26,7 @@ rootProject.name = "pnifox"
 include(
     ":app",
     ":core:model",
+    ":core:shared",
     ":core:database",
     ":core:network",
     ":core:vpn",
@@ -37,4 +38,5 @@ include(
     ":feature:mhr",
     ":feature:stats",
     ":feature:settings",
+    ":desktop",
 )

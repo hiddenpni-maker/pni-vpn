@@ -14,5 +14,9 @@ keystore.properties
 .idea/
 .DS_Store
 core-go/**/.bin/
+desktop/cores/
+desktop/dist/
+desktop/build/
+release-windows/
 *.jks
 *.keystore

@@ -6,6 +6,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
 }
 
 val keystoreProps = Properties().apply {
@@ -14,15 +16,15 @@ val keystoreProps = Properties().apply {
 }
 
 android {
-    namespace = "ir.pni.vpn"
+    namespace = "ir.pnifox.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "ir.pni.vpn"
+        applicationId = "ir.pnifox.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 100
-        versionName = "1.0.0"
+        versionCode = 200
+        versionName = "2.0.0-phase1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -94,29 +96,31 @@ android {
 }
 
 dependencies {
-    implementation(files("libs/pni-core.aar"))
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
+
+    implementation(project(":core:model"))
+    implementation(project(":core:database"))
+    implementation(project(":core:network"))
+    implementation(project(":core:vpn"))
+    implementation(project(":core:ui"))
+
+    implementation(project(":feature:home"))
+    implementation(project(":feature:servers"))
+    implementation(project(":feature:scanner"))
+    implementation(project(":feature:dns"))
+    implementation(project(":feature:mhr"))
+    implementation(project(":feature:stats"))
+    implementation(project(":feature:settings"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
-    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.hilt.navigation.compose)
 
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons)
-
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.kotlinx.serialization.json)
-    implementation(libs.okhttp)
-    implementation(libs.zxing.core)
-    implementation(libs.zxing.embedded)
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)
-    debugImplementation(libs.androidx.compose.ui.tooling)
 }

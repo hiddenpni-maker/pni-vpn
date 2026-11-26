@@ -1,5 +1,7 @@
 .gradle/
+.kotlin/
 build/
+**/build/
 app/build/
 app/libs/*.aar
 app/libs/*.jar
@@ -12,3 +14,5 @@ keystore.properties
 .idea/
 .DS_Store
 core-go/**/.bin/
+*.jks
+*.keystore

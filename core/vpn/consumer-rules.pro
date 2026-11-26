@@ -1,0 +1,1 @@
+-keep class ir.pnifox.core.vpn.TProxyService { *; }

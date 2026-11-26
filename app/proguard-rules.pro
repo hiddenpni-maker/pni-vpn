@@ -1,4 +1,5 @@
 -keep class ir.pni.core.** { *; }
+-keep class ir.pnifox.** { *; }
 -keep class core.** { *; }
 -keep class go.** { *; }
 -dontwarn go.**

@@ -21,5 +21,20 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PNI"
-include(":app")
+rootProject.name = "pnifox"
+
+include(
+    ":app",
+    ":core:model",
+    ":core:database",
+    ":core:network",
+    ":core:vpn",
+    ":core:ui",
+    ":feature:home",
+    ":feature:servers",
+    ":feature:scanner",
+    ":feature:dns",
+    ":feature:mhr",
+    ":feature:stats",
+    ":feature:settings",
+)

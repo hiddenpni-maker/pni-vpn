@@ -1,0 +1,5 @@
+<resources>
+    <string name="pnifox_notif_title">تونل امن pnifox</string>
+    <string name="pnifox_notif_channel">وضعیت اتصال pnifox</string>
+    <string name="pnifox_action_disconnect">قطع اتصال</string>
+</resources>

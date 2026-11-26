@@ -1,0 +1,5 @@
+<resources>
+    <string name="pnifox_notif_title">pnifox VPN</string>
+    <string name="pnifox_notif_channel">pnifox Secure Tunnel</string>
+    <string name="pnifox_action_disconnect">Disconnect</string>
+</resources>

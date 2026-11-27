@@ -209,7 +209,8 @@ class GamingViewModel @Inject constructor(
                 val section = applyArm(arm)
                 val t0 = System.currentTimeMillis()
                 vpnController.startConnection(section)
-                val deadline = System.currentTimeMillis() + 26_000L
+                delay(400L)
+                val deadline = System.currentTimeMillis() + 60_000L
                 while (System.currentTimeMillis() < deadline && vpnController.tunnelState.value is TunnelState.Connecting) {
                     delay(350L)
                 }

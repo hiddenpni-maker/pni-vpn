@@ -31,10 +31,23 @@ class WindowsTunConfigBuilderTest {
         assertTrue(json.contains("\"216.239.38.120/32\""))
         assertTrue(json.contains("\"server_port\":10818"))
         assertTrue(json.contains("\"aether.exe\""))
+        assertTrue(json.contains("\"pnifox.exe\""))
         assertTrue(json.contains("\"mhrv-rs.exe\""))
+        assertTrue(json.indexOf("\"process_name\"") < json.indexOf("\"hijack-dns\""))
         assertTrue(json.contains("\"external_controller\":\"127.0.0.1:19090\""))
         assertTrue(json.contains("\"secret\":\"tok123\""))
         assertTrue(json.contains("\"ip_is_private\":true"))
+
+        val dnsOnlyJson = WindowsTunConfigBuilder.buildTunBridgeConfig(
+            appSettings = app,
+            socksPort = 10818,
+            bypassTargetIps = listOf("10.202.10.10"),
+            dnsChangerOnly = true,
+            overrideResolver = "10.202.10.10",
+        )
+        assertTrue(dnsOnlyJson.contains("\"final\":\"direct\""))
+        assertTrue(dnsOnlyJson.contains("\"server\":\"10.202.10.10\""))
+        assertFalse(dnsOnlyJson.contains("\"server\":\"10.202.10.10\",\"detour\":\"socks-out\""))
     }
 
     @Test

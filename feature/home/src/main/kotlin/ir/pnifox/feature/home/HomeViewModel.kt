@@ -449,7 +449,9 @@ class HomeViewModel @Inject constructor(
                 val section = applyStrategyArm(arm)
                 val t0 = System.currentTimeMillis()
                 vpnController.startConnection(section)
-                val deadline = System.currentTimeMillis() + 26_000L
+                // Give asynchronous coroutine a brief moment to enter Connecting/Connected state before polling
+                delay(400L)
+                val deadline = System.currentTimeMillis() + 60_000L
                 while (System.currentTimeMillis() < deadline && vpnController.tunnelState.value is TunnelState.Connecting) {
                     delay(350L)
                 }

@@ -27,6 +27,8 @@ object WindowsTunConfigBuilder {
         clashApiPort: Int = 19090,
         clashSecret: String = "",
         bypassTargetIps: List<String> = emptyList(),
+        dnsChangerOnly: Boolean = false,
+        overrideResolver: String? = null,
     ): String {
         val excludeCidrs = linkedSetOf<String>()
         if (appSettings.bypassPrivateLanEnabled) {
@@ -72,6 +74,8 @@ object WindowsTunConfigBuilder {
             inbounds = inbounds,
             routeRules = routeRules,
             isTunMode = true,
+            dnsChangerOnly = dnsChangerOnly,
+            overrideResolver = overrideResolver,
         )
     }
 
@@ -83,6 +87,8 @@ object WindowsTunConfigBuilder {
         clashApiPort: Int = 19090,
         clashSecret: String = "",
         bypassTargetIps: List<String> = emptyList(),
+        dnsChangerOnly: Boolean = false,
+        overrideResolver: String? = null,
     ): String {
         val listenAddr = if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1"
         val safeHttpPort = if (httpListenPort == socksListenPort) socksListenPort + 1 else httpListenPort
@@ -113,6 +119,8 @@ object WindowsTunConfigBuilder {
             inbounds = inbounds,
             routeRules = routeRules,
             isTunMode = false,
+            dnsChangerOnly = dnsChangerOnly,
+            overrideResolver = overrideResolver,
         )
     }
 
@@ -124,7 +132,13 @@ object WindowsTunConfigBuilder {
         inbounds: JsonArray,
         routeRules: List<JsonObject>,
         isTunMode: Boolean,
+        dnsChangerOnly: Boolean = false,
+        overrideResolver: String? = null,
     ): String {
+        val resolvedDns = buildSingBoxDnsServer(
+            raw = overrideResolver?.ifBlank { null } ?: appSettings.localDns,
+            detourTag = if (dnsChangerOnly) null else "socks-out",
+        )
         val root = buildJsonObject {
             putJsonObject("log") {
                 put("level", "info")
@@ -139,14 +153,7 @@ object WindowsTunConfigBuilder {
             }
             putJsonObject("dns") {
                 putJsonArray("servers") {
-                    add(
-                        buildJsonObject {
-                            put("tag", "dns-remote")
-                            put("type", "tcp")
-                            put("server", appSettings.localDns.trim().substringBefore(':').ifBlank { "1.1.1.1" })
-                            put("detour", "socks-out")
-                        },
-                    )
+                    add(resolvedDns)
                     add(
                         buildJsonObject {
                             put("tag", "dns-direct")
@@ -180,10 +187,36 @@ object WindowsTunConfigBuilder {
                 }
                 put("default_domain_resolver", "dns-direct")
                 put("rules", JsonArray(routeRules))
-                put("final", "socks-out")
+                put("final", if (dnsChangerOnly) "direct" else "socks-out")
             }
         }
         return root.toString()
+    }
+
+    private fun buildSingBoxDnsServer(raw: String, detourTag: String?): JsonObject {
+        val clean = raw.trim().ifBlank { "1.1.1.1" }
+        val (type, host, port) = when {
+            clean.startsWith("https://", ignoreCase = true) -> {
+                val u = clean.removePrefix("https://").substringBefore('/')
+                Triple("https", u.substringBefore(':'), u.substringAfter(':', "").toIntOrNull() ?: 443)
+            }
+            clean.startsWith("quic://", ignoreCase = true) -> {
+                val u = clean.removePrefix("quic://").substringBefore('/')
+                Triple("quic", u.substringBefore(':'), u.substringAfter(':', "").toIntOrNull() ?: 853)
+            }
+            clean.startsWith("tls://", ignoreCase = true) -> {
+                val u = clean.removePrefix("tls://").substringBefore('/')
+                Triple("tls", u.substringBefore(':'), u.substringAfter(':', "").toIntOrNull() ?: 853)
+            }
+            else -> Triple(if (detourTag != null) "tcp" else "udp", clean.substringBefore(':'), clean.substringAfter(':', "").toIntOrNull() ?: 53)
+        }
+        return buildJsonObject {
+            put("tag", "dns-remote")
+            put("type", type)
+            put("server", host)
+            if (port != 53 && type == "udp") put("server_port", port)
+            if (detourTag != null) put("detour", detourTag)
+        }
     }
 
     private fun buildRouteRules(
@@ -193,22 +226,29 @@ object WindowsTunConfigBuilder {
     ): List<JsonObject> {
         val rules = mutableListOf<JsonObject>()
         rules += buildJsonObject { put("action", "sniff") }
-        if (isTunMode) {
-            rules += buildJsonObject { put("protocol", "dns"); put("action", "hijack-dns") }
-        }
 
+        // CRITICAL: Bypass local core daemons & JVM process BEFORE hijack-dns so their own
+        // upstream DNS/TLS/UDP sockets never loop back into WinTUN -> hijack-dns -> socks-out!
         val processBypass = listOf(
             "aether.exe",
             "xray.exe",
+            "sing-box.exe",
             "mhrv-rs.exe",
             "dnstt-client.exe",
             "tor.exe",
             "psiphon-tunnel-core.exe",
             "lyrebird.exe",
+            "pnifox.exe",
+            "java.exe",
+            "javaw.exe",
         )
         rules += buildJsonObject {
             putJsonArray("process_name") { processBypass.forEach { add(JsonPrimitive(it)) } }
             put("outbound", "direct")
+        }
+
+        if (isTunMode) {
+            rules += buildJsonObject { put("protocol", "dns"); put("action", "hijack-dns") }
         }
 
         val ipv4Regex = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")

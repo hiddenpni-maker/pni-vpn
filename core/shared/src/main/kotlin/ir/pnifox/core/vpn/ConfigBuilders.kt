@@ -551,7 +551,6 @@ object ConfigBuilders {
             putJsonObject("dns") {
                 putJsonArray("servers") {
                     add(JsonPrimitive(formattedServer))
-                    add(JsonPrimitive("1.1.1.1"))
                 }
                 if (adHosts.isNotEmpty()) {
                     putJsonObject("hosts") {

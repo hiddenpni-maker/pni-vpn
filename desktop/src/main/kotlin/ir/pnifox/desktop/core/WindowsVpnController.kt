@@ -182,19 +182,28 @@ class WindowsVpnController(
 
     fun startConnection(section: ActiveSectionEngine) {
         if (_tunnelState.value is TunnelState.Connecting) return
+        connectJob?.cancel()
+        connectJob = scope.launch {
+            executeConnection(section)
+        }
+    }
+
+    private suspend fun executeConnection(section: ActiveSectionEngine, fastScan: Boolean = false) {
         store.updateAppSettings { it.copy(activeSection = section) }
         val persisted = store.stateFlow.value
         val app = persisted.appSettings
-        val aether = persisted.aetherSettings
+        val aether = if (fastScan && (persisted.aetherSettings.scanForEndpoint || persisted.aetherSettings.endpointIp.isBlank())) {
+            persisted.aetherSettings.copy(scanMode = ir.pnifox.core.model.AetherScanMode.TURBO)
+        } else {
+            persisted.aetherSettings
+        }
         val dns = persisted.dnsSettings
         val mhr = persisted.mhrSettings
         val tunMode = persisted.windowsTunnelMode
         val profile = persisted.profiles.firstOrNull { it.id == app.activeProfileId }
 
-        connectJob?.cancel()
-        connectJob = scope.launch {
-            connectMutex.withLock {
-                disconnectSync(updateState = false)
+        connectMutex.withLock {
+            disconnectSync(updateState = false)
                 _sessionRxBytes.value = 0L
                 _sessionTxBytes.value = 0L
                 _rxSpeedBps.value = 0L
@@ -284,10 +293,14 @@ class WindowsVpnController(
                         val gaming = persisted.gamingSettings
                         when (gaming.mode) {
                             GamingMode.DNS_ANTI_SANCTION -> {
+                                val dnsIp = gaming.selectedDnsIp.substringBefore(':').ifBlank { "10.202.10.10" }
+                                bypassIps += dnsIp
                                 activeEndpointLabel = "Game DNS • ${gaming.selectedDnsIp}"
                                 startGamingDns(gaming, app, internalSocksPort) { lastLogLine = it }
                             }
                             GamingMode.LOCAL_DPI_DESYNC -> {
+                                val cleanDns = gaming.selectedDnsIp.substringBefore(':').ifBlank { "1.1.1.1" }
+                                bypassIps += listOf(cleanDns, "1.1.1.1", "8.8.8.8")
                                 activeEndpointLabel = "Local DPI Desync (No Server)"
                                 startLocalDesync(gaming, internalSocksPort)
                             }
@@ -341,6 +354,8 @@ class WindowsVpnController(
                         startMhr(app, aether, mhr, internalSocksPort) { lastLogLine = it }
                     }
                     ActiveSectionEngine.DNS -> {
+                        val cleanDnsHost = dns.resolverAddress.removePrefix("https://").removePrefix("quic://").removePrefix("tls://").substringBefore('/').substringBefore(':')
+                        if (cleanDnsHost.count { it == '.' } == 3) bypassIps += cleanDnsHost
                         activeEndpointLabel = when (dns.engineType) {
                             DnsEngineType.AUTO_TUNNEL -> "Auto DNS • ${dns.resolverAddress}"
                             DnsEngineType.DNS_CHANGER -> "DNS Changer • ${dns.resolverAddress}"
@@ -348,6 +363,16 @@ class WindowsVpnController(
                         }
                         startDns(dns, app, aether, internalSocksPort) { lastLogLine = it }
                     }
+                }
+
+                val isDnsChangerOnly = (section == ActiveSectionEngine.GAMING && persisted.gamingSettings.mode == GamingMode.DNS_ANTI_SANCTION) ||
+                    (section == ActiveSectionEngine.DNS && dns.engineType == DnsEngineType.DNS_CHANGER)
+                val overrideResolver = when {
+                    section == ActiveSectionEngine.GAMING && persisted.gamingSettings.mode == GamingMode.DNS_ANTI_SANCTION ->
+                        persisted.gamingSettings.selectedDnsIp.ifBlank { "10.202.10.10" }
+                    section == ActiveSectionEngine.DNS && dns.engineType == DnsEngineType.DNS_CHANGER ->
+                        dns.resolverAddress.ifBlank { "1.1.1.1" }
+                    else -> null
                 }
 
                 if (err != null) {
@@ -390,6 +415,8 @@ class WindowsVpnController(
                             clashApiPort = clashPort,
                             clashSecret = clashSecret,
                             bypassTargetIps = bypassIps,
+                            dnsChangerOnly = isDnsChangerOnly,
+                            overrideResolver = overrideResolver,
                         )
                     } else {
                         WindowsTunConfigBuilder.buildSystemGatewayConfig(
@@ -400,6 +427,8 @@ class WindowsVpnController(
                             clashApiPort = clashPort,
                             clashSecret = clashSecret,
                             bypassTargetIps = bypassIps,
+                            dnsChangerOnly = isDnsChangerOnly,
+                            overrideResolver = overrideResolver,
                         )
                     }
                     gatewayFile.writeText(gatewayJson, Charsets.UTF_8)
@@ -458,7 +487,6 @@ class WindowsVpnController(
                 refreshActiveRealDelay()
             }
         }
-    }
 
     private suspend fun startAether(
         app: AppSettings,
@@ -1271,6 +1299,7 @@ class WindowsVpnController(
         goal: ScenarioGoalId?,
         onStatus: (String) -> Unit,
     ) {
+        connectJob?.cancel()
         val arms = SmartConnectOrchestrator.rankedArms(goal, store.stateFlow.value.banditStateJson)
         val topArms = arms.take(3)
         for ((index, arm) in topArms.withIndex()) {
@@ -1278,15 +1307,10 @@ class WindowsVpnController(
             logs.append("SmartConnect", LogLevel.INFO, "Bandit arm [${index + 1}/${topArms.size}]: ${arm.titleEn}")
             val section = applyStrategyArm(arm)
             val startTime = System.currentTimeMillis()
-            startConnection(section)
+            // Await executeConnection directly so we never race ahead of coroutine startup!
+            executeConnection(section, fastScan = true)
 
-            // Wait up to 28s for Connected or Error
-            var settled = _tunnelState.value
-            val deadline = System.currentTimeMillis() + 28_000L
-            while (System.currentTimeMillis() < deadline && settled is TunnelState.Connecting) {
-                delay(350L)
-                settled = _tunnelState.value
-            }
+            val settled = _tunnelState.value
             val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(50L)
             val ok = if (settled is TunnelState.Connected) {
                 val delayMs = refreshActiveRealDelay()

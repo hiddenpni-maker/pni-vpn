@@ -9,6 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -40,6 +44,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
 /**
@@ -83,7 +88,14 @@ class PniVpnService : VpnService() {
     private var tProxyService: TProxyService? = null
     private var connectJob: Job? = null
     private var statsJob: Job? = null
+    private var reconnectJob: Job? = null
     @Volatile private var isScreenInteractive = true
+    @Volatile private var userRequestedStop = false
+    @Volatile private var autoReconnectEnabled = true
+    @Volatile private var activeSectionState = ActiveSectionEngine.AETHER
+    @Volatile private var hadPhysicalNetworkLoss = false
+    @Volatile private var hasPhysicalInternet = true
+    private val physicalNetworks = ConcurrentHashMap.newKeySet<Network>()
 
     @Volatile private var notifEngineLabel = "pnifox"
     @Volatile private var notifEndpoint = ""
@@ -91,6 +103,42 @@ class PniVpnService : VpnService() {
     @Volatile private var notifConnectedAtMs = 0L
     @Volatile private var notifIsFa = false
     @Volatile private var notifLatestPingMs: Int? = null
+
+    private val underlyingNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            val isNew = physicalNetworks.add(network)
+            val prevOnline = hasPhysicalInternet
+            hasPhysicalInternet = true
+            if (!::vpnStateHolder.isInitialized || userRequestedStop || !autoReconnectEnabled) return
+            val state = vpnStateHolder.tunnelState.value
+            val isActiveOrWaiting = state is TunnelState.Connected || state is TunnelState.Error
+            if ((hadPhysicalNetworkLoss || !prevOnline || (isNew && physicalNetworks.size == 1)) && isActiveOrWaiting) {
+                hadPhysicalNetworkLoss = false
+                if (::logs.isInitialized) {
+                    logs.append("VpnService", LogLevel.INFO, "Underlying internet restored/switched — scheduling automatic tunnel refresh...")
+                }
+                scheduleAutoReconnect("Underlying network changed/restored", delayMs = 1400L)
+            }
+        }
+
+        override fun onLost(network: Network) {
+            physicalNetworks.remove(network)
+            if (physicalNetworks.isEmpty()) {
+                hasPhysicalInternet = false
+                if (!userRequestedStop && autoReconnectEnabled && ::vpnStateHolder.isInitialized) {
+                    hadPhysicalNetworkLoss = true
+                    if (::logs.isInitialized) {
+                        logs.append("VpnService", LogLevel.WARN, "Internet lost — waiting for network recovery to reconnect automatically.")
+                    }
+                    updateForegroundNotification(
+                        title = getString(R.string.pnifox_notif_title),
+                        contentText = if (notifIsFa) "اینترنت قطع شد — در انتظار اتصال مجدد..." else "Internet lost — waiting to auto-reconnect...",
+                        asStartForeground = false,
+                    )
+                }
+            }
+        }
+    }
 
     private val screenStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -114,10 +162,21 @@ class PniVpnService : VpnService() {
             @Suppress("DEPRECATION")
             registerReceiver(screenStateReceiver, filter)
         }
+        runCatching {
+            val cm = getSystemService(ConnectivityManager::class.java)
+            val req = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+            cm?.registerNetworkCallback(req, underlyingNetworkCallback)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            userRequestedStop = true
+            reconnectJob?.cancel()
+            reconnectJob = null
             logs.append("VpnService", LogLevel.INFO, "Disconnect requested from notification.")
             teardownAndStop()
             return START_NOT_STICKY
@@ -125,21 +184,34 @@ class PniVpnService : VpnService() {
 
         val requestedSection = intent?.getStringExtra(EXTRA_SECTION)
             ?.let { runCatching { ActiveSectionEngine.valueOf(it) }.getOrNull() }
+        userRequestedStop = false
+        reconnectJob?.cancel()
+        reconnectJob = null
 
         updateForegroundNotification(
             title = getString(R.string.pnifox_notif_title),
             contentText = "Starting native tunnel engine...",
             asStartForeground = true,
         )
+        launchTunnelAttempt(requestedSection = requestedSection, isAutoRetry = false)
+        return START_STICKY
+    }
+
+    private fun launchTunnelAttempt(
+        requestedSection: ActiveSectionEngine?,
+        isAutoRetry: Boolean,
+    ) {
         connectJob?.cancel()
         connectJob = serviceScope.launch {
-            vpnStateHolder.resetSessionCounters()
+            if (!isAutoRetry) vpnStateHolder.resetSessionCounters()
             val appSettings = preferencesRepo.appSettingsFlow.first()
+            autoReconnectEnabled = appSettings.autoReconnectOnNetworkChange
             val aetherSettings = preferencesRepo.aetherSettingsFlow.first()
             val dnsSettings = preferencesRepo.dnsSettingsFlow.first()
             val mhrSettings = preferencesRepo.mhrSettingsFlow.first()
             val gamingSettings = preferencesRepo.gamingSettingsFlow.first()
             val section = requestedSection ?: appSettings.activeSection
+            activeSectionState = section
             val profile = appSettings.activeProfileId?.let { dataRepo.getProfile(it) }
             notifIsFa = appSettings.language == AppLanguage.PERSIAN
 
@@ -164,6 +236,17 @@ class PniVpnService : VpnService() {
                 return@launch
             }
 
+            // Tear down previous TUN/proxy cleanly on auto-refresh before restarting daemon
+            if (isAutoRetry) {
+                statsJob?.cancel()
+                runCatching { tProxyService?.stop() }
+                tProxyService = null
+                runCatching { processManager.stopAll() }
+                runCatching { tunInterface?.close() }
+                tunInterface = null
+                delay(300L)
+            }
+
             // 1. Start underlying SOCKS5 core daemon first (127.0.0.1:10820) and wait until ready
             var discoveredEndpointIp: String? = null
             var discoveredEndpointPort: Int? = null
@@ -186,32 +269,28 @@ class PniVpnService : VpnService() {
                 discoveredEndpointIp = ip
                 discoveredEndpointPort = port
                 if (aetherSettings.scanForEndpoint || aetherSettings.endpointIp.isBlank()) {
-                    serviceScope.launch {
-                        preferencesRepo.updateAetherSettings { cur ->
-                            cur.copy(
-                                endpointIp = ip,
-                                endpointPort = port,
-                                scanForEndpoint = false,
-                            )
-                        }
-                        logs.append("AETHER", LogLevel.INFO, "Saved discovered endpoint $ip:$port for fast future connects")
-                    }
+                    logs.append("AETHER", LogLevel.INFO, "Discovered diverse endpoint $ip:$port (auto-scan stays enabled)")
                 }
             }
 
             processManager.activeSocketProtector = { sock -> protect(sock) }
             processManager.activeDatagramProtector = { sock -> protect(sock) }
+            val effectiveAether = if (isAutoRetry && section == ActiveSectionEngine.AETHER && aetherSettings.endpointIp.isNotBlank()) {
+                aetherSettings.copy(scanForEndpoint = true, endpointIp = "")
+            } else {
+                aetherSettings
+            }
             val coreErr = when (section) {
                 ActiveSectionEngine.AETHER -> processManager.startAetherDaemon(
                     appSettings = appSettings,
-                    aether = aetherSettings,
+                    aether = effectiveAether,
                     onStageUpdate = onStageUpdate,
                     onEndpointDiscovered = onEndpointDiscovered,
                 )
                 ActiveSectionEngine.GAMING -> processManager.startGamingDaemon(
                     gaming = gamingSettings,
                     appSettings = appSettings,
-                    aetherSettings = aetherSettings,
+                    aetherSettings = effectiveAether,
                     activeProfile = profile,
                     onStageUpdate = onStageUpdate,
                     onEndpointDiscovered = onEndpointDiscovered,
@@ -219,7 +298,7 @@ class PniVpnService : VpnService() {
                 ActiveSectionEngine.DNS -> processManager.startDnsSectionDaemon(
                     dnsSettings = dnsSettings,
                     appSettings = appSettings,
-                    aetherSettings = aetherSettings,
+                    aetherSettings = effectiveAether,
                     onStageUpdate = onStageUpdate,
                     onEndpointDiscovered = onEndpointDiscovered,
                 )
@@ -228,7 +307,15 @@ class PniVpnService : VpnService() {
             }
             if (coreErr != null) {
                 vpnStateHolder.updateState(TunnelState.Error(section, coreErr))
-                teardownAndStop(keepErrorState = true)
+                if (!userRequestedStop && autoReconnectEnabled && coreErr !is ConnectionError.MissingBinary && coreErr !is ConnectionError.PermissionDenied) {
+                    if (hasPhysicalInternet) {
+                        scheduleAutoReconnect("Core failed: ${coreErr.titleEn}", delayMs = 6_000L)
+                    } else {
+                        logs.append("VpnService", LogLevel.WARN, "No active internet during connect — waiting for network recovery to retry automatically.")
+                    }
+                } else {
+                    teardownAndStop(keepErrorState = true)
+                }
                 return@launch
             }
 
@@ -376,8 +463,21 @@ class PniVpnService : VpnService() {
                 }
             }
         }
+    }
 
-        return START_STICKY
+    private fun scheduleAutoReconnect(reason: String, delayMs: Long = 2000L) {
+        if (userRequestedStop || !autoReconnectEnabled) return
+        reconnectJob?.cancel()
+        reconnectJob = serviceScope.launch {
+            delay(delayMs)
+            if (userRequestedStop || !autoReconnectEnabled) return@launch
+            if (!hasPhysicalInternet) {
+                logs.append("Watchdog", LogLevel.INFO, "Auto-reconnect paused until internet returns ($reason).")
+                return@launch
+            }
+            logs.append("Watchdog", LogLevel.INFO, "Refreshing tunnel ($reason)...")
+            launchTunnelAttempt(requestedSection = activeSectionState, isAutoRetry = true)
+        }
     }
 
     private fun buildTunInterface(
@@ -427,21 +527,30 @@ class PniVpnService : VpnService() {
         var ticks = 0
         var zeroRxWarned = false
         statsJob = serviceScope.launch {
-            while (isActive) {
+            while (isActive && !userRequestedStop) {
                 delay(2000L)
+                if (!processManager.isPrimaryDaemonAlive() && !userRequestedStop && autoReconnectEnabled) {
+                    logs.append("Watchdog", LogLevel.WARN, "Native core process exited unexpectedly — scheduling auto-reconnect...")
+                    scheduleAutoReconnect("Native core exited", delayMs = 2500L)
+                    break
+                }
                 if (pauseOnScreenOff && !isScreenInteractive) continue
                 val raw = proxy.getStats()
                 if (raw != null && raw.size >= 4) {
                     val txTotal = raw[1]
                     val rxTotal = raw[3]
                     ticks++
-                    if (!zeroRxWarned && ticks >= 5 && txTotal > 4096L && rxTotal == 0L) {
+                    if (!zeroRxWarned && ticks >= 6 && txTotal > 6144L && rxTotal == 0L) {
                         zeroRxWarned = true
                         logs.append(
                             "TProxy",
                             LogLevel.WARN,
-                            "Sent ${txTotal}B into TUN but RX is 0B — upstream tunnel did not return packets; check Logs.",
+                            "Sent ${txTotal}B into TUN with 0B RX — checking upstream health...",
                         )
+                        if (!userRequestedStop && autoReconnectEnabled && hasPhysicalInternet) {
+                            scheduleAutoReconnect("Extended 0-RX stall while internet is active", delayMs = 1500L)
+                            break
+                        }
                     }
                     val txDelta = (txTotal - lastTx).coerceAtLeast(0L)
                     val rxDelta = (rxTotal - lastRx).coerceAtLeast(0L)
@@ -600,6 +709,11 @@ class PniVpnService : VpnService() {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(screenStateReceiver) }
+        runCatching {
+            val cm = getSystemService(ConnectivityManager::class.java)
+            cm?.unregisterNetworkCallback(underlyingNetworkCallback)
+        }
+        reconnectJob?.cancel()
         statsJob?.cancel()
         tProxyService?.stop()
         processManager.stopAll()

@@ -34,7 +34,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
             packageName = "pnifox"
-            packageVersion = "2.1.0"
+            packageVersion = "2.2.0"
             description = "pnifox — Multi-Engine Censorship Circumvention Client (AETHER, Xray, Sing-box, MHR, DNSTT)"
             vendor = "pnifox"
             includeAllModules = true

@@ -176,6 +176,12 @@ class GamingViewModel @Inject constructor(
                     protocol = profile.recommendedAetherProtocol,
                     masqueTransport = if (profile.recommendedQuicV2) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
                     psiphonEnabled = profile.recommendedPsiphon,
+                    psiphonMode = profile.recommendedPsiphonMode ?: it.psiphonMode,
+                    psiphonCdnSets = if (profile.recommendedPsiphonMode == ir.pnifox.core.model.PsiphonChainMode.STANDALONE_CDN && it.psiphonCdnSets.isBlank()) {
+                        "psiphon-akamai"
+                    } else {
+                        it.psiphonCdnSets
+                    },
                     torEnabled = false,
                     noizeProfile = profile.recommendedNoiseProfile,
                     echEnabled = profile.recommendedEch,

@@ -86,6 +86,7 @@ import ir.pnifox.core.model.IpVersionMode
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.PnifoxRegionsCatalog
+import ir.pnifox.core.model.PsiphonCdnCatalog
 import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.ui.CoreLogsModalSheet
@@ -133,6 +134,7 @@ fun HomeRoute(
     val activeRegion = PnifoxRegionsCatalog.findByCode(state.aetherSettings.psiphonExitCountry)
     val isPsiphonExitActive = state.aetherSettings.psiphonEnabled ||
         state.appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON ||
+        state.appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN ||
         state.appSettings.exitNode == ir.pnifox.core.model.ExitNode.PSIPHON
 
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
@@ -675,6 +677,22 @@ fun HomeRoute(
 
                     AnimatedVisibility(visible = expandStep3Advanced) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+                            PnifoxSwitchRow(
+                                title = tr("Auto-Scan Diverse Endpoint (Don't Lock 1 IP)", "اسکن متنوع اندپوینت (عدم قفل روی یک IP)"),
+                                subtitle = tr("Scans diverse Cloudflare WARP subnets instead of retrying the same IP.", "به‌جای قفل ماندن روی یک آی‌پی، رنج‌های متنوع WARP را اسکن می‌کند."),
+                                checked = state.aetherSettings.scanForEndpoint,
+                                onCheckedChange = { c -> viewModel.updateAether { it.copy(scanForEndpoint = c) } },
+                            )
+                            Text(tr("Endpoint Scan Style (--scan)", "سرعت و سبک اسکن اندپوینت"), style = MaterialTheme.typography.labelMedium)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AetherScanMode.entries.forEach { sm ->
+                                    FilterChip(
+                                        selected = state.aetherSettings.scanMode == sm,
+                                        onClick = { viewModel.updateAether { it.copy(scanMode = sm) } },
+                                        label = { Text(sm.label) },
+                                    )
+                                }
+                            }
                             OutlinedTextField(
                                 value = state.aetherSettings.sni,
                                 onValueChange = { v -> viewModel.updateAether { it.copy(sni = v) } },
@@ -761,13 +779,47 @@ fun HomeRoute(
                                 checked = state.aetherSettings.psiphonEnabled,
                                 onCheckedChange = { c -> viewModel.updateAether { it.copy(psiphonEnabled = c) } },
                             )
-                            if (state.aetherSettings.psiphonEnabled) {
+                            if (state.aetherSettings.psiphonEnabled ||
+                                state.appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON ||
+                                state.appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN
+                            ) {
+                                Text(
+                                    text = tr(
+                                        "Psiphon / Akamai CDN Mode (Shir o Khorshid)",
+                                        "حالت سایفون و فرانتینگ اکامای (روش شیر و خورشید)",
+                                    ),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     PsiphonChainMode.entries.forEach { pm ->
                                         FilterChip(
                                             selected = state.aetherSettings.psiphonMode == pm,
                                             onClick = { viewModel.updateAether { it.copy(psiphonMode = pm) } },
-                                            label = { Text(pm.labelEn) },
+                                            label = { Text(if (isFa) pm.labelFa else pm.labelEn) },
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = tr("Built-in CDN Edge Sets (optional)", "پکیج آی‌پی CDN داخلی (اختیاری):"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                val activeSets = state.aetherSettings.psiphonCdnSets
+                                    .split(',', ';', '\n', ' ')
+                                    .map { it.trim() }
+                                    .filter { it.isNotBlank() }
+                                    .toSet()
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    PsiphonCdnCatalog.availableCdnSets.forEach { (id, label) ->
+                                        val selected = id in activeSets
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = {
+                                                val next = if (selected) activeSets - id else activeSets + id
+                                                viewModel.updateAether { it.copy(psiphonCdnSets = next.joinToString(",")) }
+                                            },
+                                            label = { Text(label) },
                                         )
                                     }
                                 }
@@ -779,14 +831,33 @@ fun HomeRoute(
                                     ) {
                                         Text("${activeRegion.flag} ${activeRegion.code}", maxLines = 1)
                                     }
-                                    OutlinedTextField(
-                                        value = state.aetherSettings.psiphonCdnFrontingIps,
-                                        onValueChange = { v -> viewModel.updateAether { it.copy(psiphonCdnFrontingIps = v) } },
-                                        label = { Text("CDN Fronting IPs") },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1.4f),
-                                    )
+                                    OutlinedButton(
+                                        onClick = viewModel::testAndSortPsiphonCdnEdges,
+                                        enabled = !state.isFetchingEch && state.aetherSettings.psiphonCdnFrontingIps.isNotBlank(),
+                                        modifier = Modifier.weight(1.3f),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Text(tr("Test Edge IPs", "تست آی‌پی‌های CDN"), maxLines = 1)
+                                    }
                                 }
+                                OutlinedTextField(
+                                    value = state.aetherSettings.psiphonCdnFrontingIps,
+                                    onValueChange = { v -> viewModel.updateAether { it.copy(psiphonCdnFrontingIps = v) } },
+                                    label = { Text(tr("CDN Edge IPs / CIDRs (Akamai, Cloudflare...)", "آی‌پی / رنج‌های Akamai و CDN")) },
+                                    placeholder = { Text("23.x.x.x, 104.x.x.x ...") },
+                                    minLines = 2,
+                                    maxLines = 4,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = state.aetherSettings.psiphonCdnSniHostnames,
+                                    onValueChange = { v -> viewModel.updateAether { it.copy(psiphonCdnSniHostnames = v) } },
+                                    label = { Text(tr("CDN SNI Hostnames (optional)", "SNIهای فرانتینگ (اختیاری)")) },
+                                    placeholder = { Text("comma, space, or newline; blank tests no-SNI too") },
+                                    minLines = 2,
+                                    maxLines = 4,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                             PnifoxSwitchRow(
                                 title = "Tor Exit Inside Tunnel (--tor)",

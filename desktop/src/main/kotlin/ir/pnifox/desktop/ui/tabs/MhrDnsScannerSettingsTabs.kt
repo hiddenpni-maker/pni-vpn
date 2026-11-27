@@ -72,6 +72,7 @@ import ir.pnifox.core.model.IranPresetsCatalog
 import ir.pnifox.core.model.MhrDefaultSniPool
 import ir.pnifox.core.model.MhrMode
 import ir.pnifox.core.model.PnifoxUsageGuideCatalog
+import ir.pnifox.core.model.ScanStyle
 import ir.pnifox.core.model.ThemeModePref
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.model.UpdateCheckState
@@ -670,10 +671,12 @@ fun ScannerDesktopTab(
     state: DesktopUiState,
     holder: DesktopStateHolder,
 ) {
+    val isFa = LocalDesktopLanguage.current == AppLanguage.PERSIAN
     var provider by remember { mutableStateOf("cloudflare" to "cf_v4.txt") }
+    var scanStyle by remember { mutableStateOf(ScanStyle.TURBO_FAST) }
     var sni by remember { mutableStateOf("speed.cloudflare.com") }
     var customTargets by remember { mutableStateOf("") }
-    var countFloat by remember { mutableStateOf(60f) }
+    var countFloat by remember { mutableStateOf(80f) }
 
     val providers = listOf(
         "cloudflare" to "cf_v4.txt",
@@ -697,17 +700,27 @@ fun ScannerDesktopTab(
                         )
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ScanStyle.entries.forEach { style ->
+                        FilterChip(
+                            selected = scanStyle == style,
+                            onClick = { scanStyle = style },
+                            label = { Text(if (isFa) style.labelFa else style.labelEn) },
+                        )
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = sni, onValueChange = { sni = it }, label = { Text("TLS SNI") }, singleLine = true, modifier = Modifier.weight(1f))
                     OutlinedTextField(value = customTargets, onValueChange = { customTargets = it }, label = { Text(dtr("Custom IPs / CIDRs (optional)", "رنج IP دلخواه (اختیاری)")) }, singleLine = true, modifier = Modifier.weight(1.4f))
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(dtr("Sample IPs: ${countFloat.toInt()}", "تعداد تست: ${countFloat.toInt()}"), style = MaterialTheme.typography.labelMedium)
-                Slider(value = countFloat, onValueChange = { countFloat = it }, valueRange = 15f..250f)
+                Text(dtr("Diverse Sample IPs: ${countFloat.toInt()}", "تعداد تست متنوع: ${countFloat.toInt()}"), style = MaterialTheme.typography.labelMedium)
+                Slider(value = countFloat, onValueChange = { countFloat = it }, valueRange = 20f..250f)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (!state.isScanning) {
-                        Button(onClick = { holder.startScan(provider.first, provider.second, customTargets, sni, countFloat.toInt()) }) {
+                        Button(onClick = { holder.startScan(provider.first, provider.second, customTargets, sni, countFloat.toInt(), scanStyle) }) {
                             Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(dtr("Start Scan", "شروع اسکن"))
@@ -721,6 +734,15 @@ fun ScannerDesktopTab(
                     }
                     if (state.scanProgressText.isNotBlank()) {
                         Text(state.scanProgressText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                    val topHealthy = state.scanResults.filter { it.lossPct <= 35.0 }.take(25).map { it.ip }
+                    if (topHealthy.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = { holder.applyScannedIpsToPsiphonCdn(topHealthy, provider.first) },
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(dtr("Apply Top ${topHealthy.size} to Akamai CDN", "اعمال ${topHealthy.size} IP به فرانتینگ اکامای"))
+                        }
                     }
                 }
             }
@@ -740,6 +762,10 @@ fun ScannerDesktopTab(
                     Spacer(Modifier.width(10.dp))
                     OutlinedButton(onClick = { holder.applyScannedIp(res.ip, res.port) }, shape = RoundedCornerShape(8.dp)) {
                         Text(dtr("Apply IP", "اعمال IP"))
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    OutlinedButton(onClick = { holder.applyScannedIpsToPsiphonCdn(listOf(res.ip), provider.first) }, shape = RoundedCornerShape(8.dp)) {
+                        Text(dtr("Akamai CDN", "اکامای CDN"))
                     }
                 }
             }
@@ -833,6 +859,12 @@ fun SettingsDesktopTab(
         item {
             DesktopCard {
                 Text(dtr("Rulesets · Whitelist Iran & AdBlock", "قوانین مسیریابی · وایت‌لیست ایران و AdBlock"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                DesktopSwitchRow(
+                    title = dtr("Auto-Reconnect on Internet Drop / Network Change", "اتصال مجدد خودکار هنگام قطع و وصل اینترنت"),
+                    subtitle = dtr("Automatically refreshes the tunnel when Wi-Fi/hotspot reconnects without manual Off/On.", "اگر اینترنت قطع و دوباره وصل شد، برنامه خودش اتصال را رفرش و مجددا برقرار می‌کند."),
+                    checked = app.autoReconnectOnNetworkChange,
+                    onCheckedChange = { c -> holder.updateApp { it.copy(autoReconnectOnNetworkChange = c) } },
+                )
                 DesktopSwitchRow(dtr("Whitelist Iran Sites (Bypass VPN)", "عبور مستقیم سایت‌های ایرانی و بانکی"), checked = app.bypassIranEnabled, onCheckedChange = { c -> holder.updateApp { it.copy(bypassIranEnabled = c) } })
                 DesktopSwitchRow(dtr("Block Ads & Trackers (AdBlock)", "بلاک کردن تبلیغات"), checked = app.blockAdsEnabled, onCheckedChange = { c -> holder.updateApp { it.copy(blockAdsEnabled = c) } })
                 DesktopSwitchRow(dtr("Bypass Private LAN / Router", "عبور مستقیم شبکه محلی و مودم"), checked = app.bypassPrivateLanEnabled, onCheckedChange = { c -> holder.updateApp { it.copy(bypassPrivateLanEnabled = c) } })

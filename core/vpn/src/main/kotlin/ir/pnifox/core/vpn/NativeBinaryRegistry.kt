@@ -112,10 +112,13 @@ class NativeBinaryRegistry @Inject constructor(
                     add(NativeBinaryId.AETHER)
                     val needPsiphon = aetherSettings.psiphonEnabled ||
                         appSettings.exitNode == ExitNode.PSIPHON ||
-                        appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON
-                    val needTor = aetherSettings.torEnabled ||
-                        appSettings.exitNode == ExitNode.TOR ||
-                        appSettings.activePreset == OneTapPreset.WARP_TO_TOR
+                        appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON ||
+                        appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN
+                    val needTor = !needPsiphon && (
+                        aetherSettings.torEnabled ||
+                            appSettings.exitNode == ExitNode.TOR ||
+                            appSettings.activePreset == OneTapPreset.WARP_TO_TOR
+                        )
                     if (needPsiphon) add(NativeBinaryId.PSIPHON)
                     if (!needPsiphon && needTor) {
                         add(NativeBinaryId.TOR)

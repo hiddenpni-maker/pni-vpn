@@ -87,6 +87,8 @@ class NativeProcessManager @Inject constructor(
 
     fun isXrayActive(): Boolean = xrayStarted
 
+    fun isPrimaryDaemonAlive(): Boolean = activeProcess?.let { isProcessAlive(it) } ?: true
+
     fun inspectAetherIdentities(): AetherIdentityFilesState {
         val dir = aetherWorkDir
         return AetherIdentityFilesState(
@@ -340,17 +342,11 @@ class NativeProcessManager @Inject constructor(
             aether
         }
         val args = argBuilder.buildRunArgs(appSettings, effectiveAether, nativeDir, aetherWorkDir, serversDat, routesFile)
-        val usePsiphon = aether.psiphonEnabled ||
-            appSettings.exitNode == ExitNode.PSIPHON ||
-            appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON
-        val useTor = !usePsiphon && (
-            aether.torEnabled ||
-                appSettings.exitNode == ExitNode.TOR ||
-                appSettings.activePreset == OneTapPreset.WARP_TO_TOR
-            )
+        val usePsiphon = argBuilder.isPsiphonActive(appSettings, aether)
+        val useTor = argBuilder.isTorActive(appSettings, aether)
 
         val readyMarkers = when {
-            usePsiphon -> listOf("[+] psiphon is ready")
+            usePsiphon && !aether.psiphonMode.isReverse -> listOf("[+] psiphon is ready")
             useTor -> listOf("[+] tor is ready")
             else -> listOf("[+] socks5 server listening on")
         }

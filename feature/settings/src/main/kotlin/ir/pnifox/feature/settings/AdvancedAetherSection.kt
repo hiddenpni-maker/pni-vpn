@@ -28,6 +28,7 @@ import ir.pnifox.core.model.AetherSettings
 import ir.pnifox.core.model.ExitDialMode
 import ir.pnifox.core.model.IpVersionMode
 import ir.pnifox.core.model.MasqueTransport
+import ir.pnifox.core.model.PsiphonCdnCatalog
 import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.ui.PnifoxSwitchRow
 
@@ -216,6 +217,36 @@ fun AdvancedAetherSection(
                 )
             }
         }
+        val activeSets = aether.psiphonCdnSets.split(',', ';', '\n', ' ').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PsiphonCdnCatalog.availableCdnSets.forEach { (id, label) ->
+                val selected = id in activeSets
+                FilterChip(
+                    selected = selected,
+                    onClick = {
+                        val next = if (selected) activeSets - id else activeSets + id
+                        onUpdateAether { it.copy(psiphonCdnSets = next.joinToString(",")) }
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+        OutlinedTextField(
+            value = aether.psiphonCdnFrontingIps,
+            onValueChange = { v -> onUpdateAether { it.copy(psiphonCdnFrontingIps = v) } },
+            label = { Text("CDN Edge IPs / CIDRs (Akamai, Cloudflare)") },
+            minLines = 2,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = aether.psiphonCdnSniHostnames,
+            onValueChange = { v -> onUpdateAether { it.copy(psiphonCdnSniHostnames = v) } },
+            label = { Text("CDN SNI Hostnames (comma/space/newline)") },
+            minLines = 2,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+        )
         PnifoxSwitchRow(
             title = "Start from bundled psiphon_servers.dat",
             checked = aether.psiphonUseBundledServersDat,

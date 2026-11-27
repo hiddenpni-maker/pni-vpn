@@ -70,22 +70,44 @@ enum class ExitDialMode(val cliValue: String, val label: String) {
 }
 
 @Serializable
-enum class PsiphonChainMode(val cliMode: String, val labelEn: String, val labelFa: String) {
-    WARP_TO_PSIPHON("auto", "WARP → Psiphon", "WARP → Psiphon (ضدتحریم)"),
-    CDN_FRONTING("cdn", "Psiphon CDN Fronting", "عبور CDN سایفون"),
-    STANDALONE("auto", "Psiphon Only", "سایفون مستقیم"),
+enum class PsiphonChainMode(
+    val cliMode: String,
+    val labelEn: String,
+    val labelFa: String,
+    val isStandalone: Boolean = false,
+    val isReverse: Boolean = false,
+) {
+    WARP_TO_PSIPHON("auto", "WARP → Psiphon", "WARP → سایفون (خودکار)"),
+    CDN_FRONTING("cdn", "WARP → Psiphon CDN", "WARP → فرانتینگ CDN"),
+    STANDALONE("auto", "Psiphon Auto (Standalone)", "سایفون خودکار (شیر و خورشید)", isStandalone = true),
+    STANDALONE_CDN("cdn", "Akamai / CDN Fronting (Shir o Khorshid)", "فرانتینگ Akamai / CDN (شیر و خورشید)", isStandalone = true),
+    STANDALONE_DIRECT("direct", "Psiphon Direct (Standalone)", "اتصال مستقیم سایفون (Direct)", isStandalone = true),
+    PSIPHON_TO_WARP("cdn", "Psiphon CDN → WARP (Reverse)", "سایفون CDN ← WARP", isReverse = true),
+}
+
+object PsiphonCdnCatalog {
+    val availableCdnSets: List<Pair<String, String>> = listOf(
+        "psiphon-akamai" to "Akamai Edge",
+        "cloudflare" to "Cloudflare",
+        "fastly" to "Fastly",
+        "cloudfront" to "CloudFront",
+        "psiphon-bunny" to "BunnyCDN",
+        "vercel" to "Vercel",
+        "github" to "GitHub",
+        "curated-fronting" to "Curated Fronting",
+    )
 }
 
 @Serializable
 data class AetherSettings(
     val protocol: AetherProtocol = AetherProtocol.MASQUE,
     val masqueTransport: MasqueTransport = MasqueTransport.HTTP2,
-    val endpointIp: String = "162.159.198.1",
+    val endpointIp: String = "",
     val endpointPort: Int = 443,
     val innerEndpointPeer: String = "",
     val sni: String = "www.cloudflare.com",
     val ipVersion: IpVersionMode = IpVersionMode.V4,
-    val scanMode: AetherScanMode = AetherScanMode.BALANCED,
+    val scanMode: AetherScanMode = AetherScanMode.TURBO,
     val scanForEndpoint: Boolean = true,
     val noizeProfile: AetherNoizeProfile = AetherNoizeProfile.FIREWALL,
     val tlsFingerprint: TlsFingerprint = TlsFingerprint.CHROME,
@@ -103,6 +125,8 @@ data class AetherSettings(
     val psiphonEnabled: Boolean = false,
     val psiphonMode: PsiphonChainMode = PsiphonChainMode.WARP_TO_PSIPHON,
     val psiphonCdnFrontingIps: String = "",
+    val psiphonCdnSniHostnames: String = "",
+    val psiphonCdnSets: String = "",
     val psiphonExitCountry: String = "AUTO",
     val psiphonUseBundledServersDat: Boolean = true,
     val torEnabled: Boolean = false,

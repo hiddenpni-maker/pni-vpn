@@ -56,6 +56,7 @@ import ir.pnifox.core.model.ScanCategoryFilter
 import ir.pnifox.core.model.ScanProvider
 import ir.pnifox.core.model.ScanSortBy
 import ir.pnifox.core.model.ScanSpeedTier
+import ir.pnifox.core.model.ScanStyle
 import ir.pnifox.core.ui.LocalAppLanguage
 import ir.pnifox.core.ui.PnifoxBadgePill
 import ir.pnifox.core.ui.PnifoxCard
@@ -98,6 +99,16 @@ fun ScannerRoute(
                             selected = state.provider == provider,
                             onClick = { viewModel.selectProvider(provider) },
                             label = { Text(if (isFa) provider.labelFa else provider.labelEn, maxLines = 1) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(ScanStyle.entries) { style ->
+                        FilterChip(
+                            selected = state.scanStyle == style,
+                            onClick = { viewModel.setScanStyle(style) },
+                            label = { Text(if (isFa) style.labelFa else style.labelEn, maxLines = 1) },
                         )
                     }
                 }
@@ -175,6 +186,13 @@ fun ScannerRoute(
                     if (state.progressLabel.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
                         Text(state.progressLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                    val topHealthy = state.filteredResults.filter { it.packetLossPct <= 35 }.take(25).map { it.ip }
+                    if (topHealthy.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(onClick = { viewModel.applyIpsToPsiphonCdn(topHealthy, state.provider) }) {
+                            Text(tr("Apply Top ${topHealthy.size} to Akamai / Psiphon CDN", "اعمال ${topHealthy.size} IP به فرانتینگ اکامای"), style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }
@@ -264,6 +282,9 @@ fun ScannerRoute(
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             OutlinedButton(onClick = { viewModel.applyToAether(row) }) {
                                 Text(tr("Use in AETHER", "اعمال به AETHER"), style = MaterialTheme.typography.labelSmall)
+                            }
+                            OutlinedButton(onClick = { viewModel.applyIpsToPsiphonCdn(listOf(row.ip), row.provider) }) {
+                                Text(tr("Akamai CDN", "اکامای CDN"), style = MaterialTheme.typography.labelSmall)
                             }
                             OutlinedButton(onClick = { viewModel.applyToActiveServer(row) }) {
                                 Text(tr("Use in Server", "اعمال به سرور"), style = MaterialTheme.typography.labelSmall)

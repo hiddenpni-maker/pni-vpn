@@ -18,6 +18,7 @@ import ir.pnifox.core.model.ExitNode
 import ir.pnifox.core.model.GamingMode
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.OneTapPreset
+import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.model.RecoveryAction
 import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.ScenarioProfile
@@ -274,10 +275,63 @@ class HomeViewModel @Inject constructor(
         applyOneTapPreset(OneTapPreset.WARP_TO_PSIPHON)
     }
 
+    fun testAndSortPsiphonCdnEdges() {
+        if (aetherRuntime.value.isFetchingEch) return
+        val aether = uiState.value.aetherSettings
+        val tokens = aether.psiphonCdnFrontingIps
+            .split(',', ';', '\n', '\r', '\t', ' ')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        if (tokens.isEmpty()) {
+            aetherRuntime.value = aetherRuntime.value.copy(keyActionMessage = "Enter Akamai/CDN IPs first or pick psiphon-akamai set.")
+            return
+        }
+        viewModelScope.launch {
+            aetherRuntime.value = aetherRuntime.value.copy(isFetchingEch = true, keyActionMessage = "Testing ${tokens.size} CDN edge IP(s) on :443...")
+            val sni = aether.psiphonCdnSniHostnames.split(',', ';', '\n', ' ').firstOrNull { it.isNotBlank() }.orEmpty()
+            val expanded = tokens.flatMap { entry ->
+                if (!entry.contains('/')) listOf(entry)
+                else {
+                    val base = entry.substringBefore('/').split('.')
+                    if (base.size == 4) listOf("${base[0]}.${base[1]}.${base[2]}.1", "${base[0]}.${base[1]}.${base[2]}.10") else emptyList()
+                }
+            }.distinct().take(48)
+            val ranked = withContext(Dispatchers.IO) {
+                expanded.mapNotNull { ip ->
+                    val start = System.nanoTime()
+                    val ok = runCatching {
+                        java.net.Socket().use { s -> s.connect(java.net.InetSocketAddress(ip, 443), 2200) }
+                        if (sni.isNotBlank()) true else true
+                    }.isSuccess
+                    if (ok) ip to ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L).toInt() else null
+                }.sortedBy { it.second }
+            }
+            if (ranked.isEmpty()) {
+                aetherRuntime.value = aetherRuntime.value.copy(
+                    isFetchingEch = false,
+                    keyActionMessage = "No entered edge IPs answered :443. Built-in psiphon-akamai list will be tried.",
+                )
+            } else {
+                val sortedIps = ranked.map { it.first }.joinToString(", ")
+                preferencesRepo.updateAetherSettings { it.copy(psiphonCdnFrontingIps = sortedIps) }
+                aetherRuntime.value = aetherRuntime.value.copy(
+                    isFetchingEch = false,
+                    keyActionMessage = "${ranked.size}/${expanded.size} CDN IPs reachable (fastest: ${ranked.first().first} @ ${ranked.first().second}ms)",
+                )
+            }
+        }
+    }
+
     fun rescanAetherEndpointAndConnect() {
         viewModelScope.launch {
-            preferencesRepo.updateAetherSettings { it.copy(scanForEndpoint = true) }
-            logRingBuffer.append("Controller", LogLevel.INFO, "Fresh endpoint scan requested by user.")
+            preferencesRepo.updateAetherSettings {
+                it.copy(
+                    endpointIp = "",
+                    scanForEndpoint = true,
+                    scanMode = ir.pnifox.core.model.AetherScanMode.TURBO,
+                )
+            }
+            logRingBuffer.append("Controller", LogLevel.INFO, "Fresh diverse endpoint scan requested (Turbo across all WARP prefixes).")
             val st = vpnController.tunnelState.value
             if (st is TunnelState.Connected || st is TunnelState.Connecting) {
                 vpnController.disconnect()
@@ -295,7 +349,7 @@ class HomeViewModel @Inject constructor(
                         activePreset = preset,
                         exitNode = ExitNode.DEFAULT,
                     )
-                    OneTapPreset.WARP_TO_PSIPHON -> current.copy(
+                    OneTapPreset.WARP_TO_PSIPHON, OneTapPreset.PSIPHON_AKAMAI_CDN -> current.copy(
                         activePreset = preset,
                         exitNode = ExitNode.PSIPHON,
                     )
@@ -319,6 +373,15 @@ class HomeViewModel @Inject constructor(
                         protocol = AetherProtocol.MASQUE,
                         masqueTransport = MasqueTransport.HTTP2,
                         psiphonEnabled = true,
+                        psiphonMode = if (current.psiphonMode.isStandalone) PsiphonChainMode.WARP_TO_PSIPHON else current.psiphonMode,
+                        torEnabled = false,
+                    )
+                    OneTapPreset.PSIPHON_AKAMAI_CDN -> current.copy(
+                        protocol = AetherProtocol.MASQUE,
+                        masqueTransport = MasqueTransport.HTTP2,
+                        psiphonEnabled = true,
+                        psiphonMode = PsiphonChainMode.STANDALONE_CDN,
+                        psiphonCdnSets = current.psiphonCdnSets.ifBlank { "psiphon-akamai" },
                         torEnabled = false,
                     )
                     OneTapPreset.WG_OVER_MASQUE -> current.copy(
@@ -382,6 +445,12 @@ class HomeViewModel @Inject constructor(
                     protocol = profile.recommendedAetherProtocol,
                     masqueTransport = if (profile.recommendedQuicV2) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
                     psiphonEnabled = profile.recommendedPsiphon,
+                    psiphonMode = profile.recommendedPsiphonMode ?: it.psiphonMode,
+                    psiphonCdnSets = if (profile.recommendedPsiphonMode == PsiphonChainMode.STANDALONE_CDN && it.psiphonCdnSets.isBlank()) {
+                        "psiphon-akamai"
+                    } else {
+                        it.psiphonCdnSets
+                    },
                     torEnabled = false,
                     noizeProfile = profile.recommendedNoiseProfile,
                     echEnabled = profile.recommendedEch,

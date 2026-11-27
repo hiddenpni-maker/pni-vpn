@@ -185,6 +185,12 @@ fun SettingsRoute(
             item { PnifoxSectionLabel(title = tr("Global & Routing", "عمومی و مسیریابی")) }
             item {
                 PnifoxCard(contentPadding = metrics.cardPadding) {
+                    PnifoxSwitchRow(
+                        title = tr("Auto-Reconnect on Internet Drop / Change", "اتصال مجدد خودکار هنگام قطع و وصل اینترنت"),
+                        subtitle = tr("Automatically refreshes tunnel when Wi-Fi or mobile data reconnects.", "هنگام قطع و وصل شدن اینترنت بدون نیاز به خاموش و روشن دستی، اتصال را رفرش می‌کند."),
+                        checked = state.appSettings.autoReconnectOnNetworkChange,
+                        onCheckedChange = { c -> viewModel.updateApp { it.copy(autoReconnectOnNetworkChange = c) } },
+                    )
                     PnifoxSwitchRow(title = "Chain Proxies", checked = state.appSettings.chainProxies, onCheckedChange = { c -> viewModel.updateApp { it.copy(chainProxies = c) } })
                     PnifoxSwitchRow(title = "Fake DNS", checked = state.appSettings.fakeDnsEnabled, onCheckedChange = { c -> viewModel.updateApp { it.copy(fakeDnsEnabled = c) } })
                     PnifoxSwitchRow(title = "IPv6 Routing", checked = state.appSettings.ipv6Enabled, onCheckedChange = { c -> viewModel.updateApp { it.copy(ipv6Enabled = c) } })

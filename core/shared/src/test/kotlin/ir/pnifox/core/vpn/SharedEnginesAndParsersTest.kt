@@ -230,4 +230,27 @@ class SharedEnginesAndParsersTest {
         val adapted = SmartConnectOrchestrator.rankedArms(ScenarioGoalId.LOCAL_DPI_ZERO_SERVER, state)
         assertEquals(StrategyArm.LOCAL_DPI_DESYNC, adapted.first())
     }
+
+    @Test
+    fun `cdn scanner expandCidrs samples across diverse prefixes and wide cidr ranges`() {
+        val wideCidrs = listOf(
+            "23.0.0.0/12",
+            "104.16.0.0/16",
+            "162.159.192.0/24",
+            "162.159.198.0/24",
+            "188.114.97.0/24",
+            "2.16.0.0/13",
+        )
+        val sampled = JvmCdnScanner.expandCidrs(wideCidrs, maxSamples = 60, excludeIps = setOf("162.159.198.1"))
+        assertEquals(60, sampled.size)
+        assertFalse(sampled.contains("162.159.198.1"))
+        // Should span multiple distinct /16 prefixes, not stay trapped inside the first prefix only
+        val distinctSecondOctets = sampled.map { it.split('.').take(2).joinToString(".") }.toSet()
+        assertTrue(distinctSecondOctets.size >= 4)
+        // Wide /12 & /13 ranges should vary third octet instead of pinning to .0.x
+        val akamai23 = sampled.filter { it.startsWith("23.") }
+        if (akamai23.size >= 2) {
+            assertTrue(akamai23.map { it.split('.')[2] }.toSet().size >= 2)
+        }
+    }
 }

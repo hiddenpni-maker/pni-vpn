@@ -70,6 +70,13 @@ enum class OneTapPreset(
         subtitleFa = "تغییر IP و عبور از تحریم و فیلترینگ شدید",
         isChain = true,
     ),
+    PSIPHON_AKAMAI_CDN(
+        titleEn = "Akamai / CDN Fronting (Shir o Khorshid)",
+        titleFa = "فرانتینگ Akamai / CDN (شیر و خورشید)",
+        subtitleEn = "Standalone Psiphon CDN fronting with Akamai edge IPs & custom SNIs",
+        subtitleFa = "اتصال با آی‌پی لبه اکامای / CDN و SNI دلخواه بدون نیاز به WARP",
+        isChain = true,
+    ),
     WG_OVER_MASQUE(
         titleEn = "WireGuard over MASQUE (--gool)",
         titleFa = "WireGuard روی MASQUE",

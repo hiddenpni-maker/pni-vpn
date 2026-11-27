@@ -75,6 +75,26 @@ class AetherArgBuilder @Inject constructor() {
         add("info")
     }
 
+    fun normalizeCliCsvTokens(raw: String): String = raw
+        .split(',', ';', '\n', '\r', '\t', ' ')
+        .map { it.trim() }
+        .filter { it.isNotBlank() && !it.startsWith("#") }
+        .distinct()
+        .joinToString(",")
+
+    fun isPsiphonActive(appSettings: AppSettings, aether: AetherSettings): Boolean =
+        aether.psiphonEnabled ||
+            appSettings.exitNode == ExitNode.PSIPHON ||
+            appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON ||
+            appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN
+
+    fun isTorActive(appSettings: AppSettings, aether: AetherSettings): Boolean =
+        !isPsiphonActive(appSettings, aether) && (
+            aether.torEnabled ||
+                appSettings.exitNode == ExitNode.TOR ||
+                appSettings.activePreset == OneTapPreset.WARP_TO_TOR
+            )
+
     fun buildRunArgs(
         appSettings: AppSettings,
         aether: AetherSettings,
@@ -91,41 +111,60 @@ class AetherArgBuilder @Inject constructor() {
         add("--masque-config")
         add(File(workDir, "aether-masque.toml").absolutePath)
 
-        val usePsiphon = aether.psiphonEnabled ||
-            appSettings.exitNode == ExitNode.PSIPHON ||
-            appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON
-        val useTor = !usePsiphon && (
-            aether.torEnabled ||
-                appSettings.exitNode == ExitNode.TOR ||
-                appSettings.activePreset == OneTapPreset.WARP_TO_TOR
-            )
+        val usePsiphon = isPsiphonActive(appSettings, aether)
+        val useTor = isTorActive(appSettings, aether)
 
         // When chaining Tor or Psiphon, Aether itself listens on inner port and Tor/Psiphon
         // exposes the final SOCKS5 proxy directly on localSocksPort (127.0.0.1:10820 or 0.0.0.0 when allowLan=true).
+        // When psiphonMode.isStandalone, Psiphon exposes localSocksPort directly without WARP outer hop.
+        // When psiphonMode.isReverse, Psiphon listens on innerAetherBindPort and WARP dials through it to serve localSocksPort.
         val publicBindHost = if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1"
-        val psiphonStandalone = usePsiphon && aether.psiphonMode == PsiphonChainMode.STANDALONE
+        val effectivePsiphonMode = if (appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN &&
+            !aether.psiphonMode.isStandalone && !aether.psiphonMode.isReverse &&
+            aether.psiphonMode != PsiphonChainMode.CDN_FRONTING
+        ) {
+            PsiphonChainMode.STANDALONE_CDN
+        } else {
+            aether.psiphonMode
+        }
+        val psiphonStandalone = usePsiphon && effectivePsiphonMode.isStandalone
+        val psiphonReverse = usePsiphon && effectivePsiphonMode.isReverse
         if (usePsiphon) {
-            if (psiphonStandalone) {
-                add("--bind")
-                add("$publicBindHost:${aether.localSocksPort}")
-                add("--psiphon-only")
-                if (exposeLocalHttpProxy) {
-                    add("--psiphon-http")
-                    add("$publicBindHost:${appSettings.httpProxyPort}")
+            when {
+                psiphonStandalone -> {
+                    add("--bind")
+                    add("$publicBindHost:${aether.localSocksPort}")
+                    add("--psiphon-only")
+                    if (exposeLocalHttpProxy) {
+                        add("--psiphon-http")
+                        add("$publicBindHost:${appSettings.httpProxyPort}")
+                    }
                 }
-            } else {
-                add("--bind")
-                add("127.0.0.1:${aether.innerAetherBindPort}")
-                add("--psiphon")
-                add("--psiphon-bind")
-                add("$publicBindHost:${aether.localSocksPort}")
-                if (exposeLocalHttpProxy) {
-                    add("--psiphon-http")
-                    add("$publicBindHost:${appSettings.httpProxyPort}")
+                psiphonReverse -> {
+                    add("--bind")
+                    add("$publicBindHost:${aether.localSocksPort}")
+                    if (exposeLocalHttpProxy) {
+                        add("--http-proxy")
+                        add("$publicBindHost:${appSettings.httpProxyPort}")
+                    }
+                    add("--psiphon-reverse")
+                    add("--psiphon-bind")
+                    add("127.0.0.1:${aether.innerAetherBindPort}")
+                }
+                else -> {
+                    add("--bind")
+                    add("127.0.0.1:${aether.innerAetherBindPort}")
+                    add("--psiphon")
+                    add("--psiphon-bind")
+                    add("$publicBindHost:${aether.localSocksPort}")
+                    if (exposeLocalHttpProxy) {
+                        add("--psiphon-http")
+                        add("$publicBindHost:${appSettings.httpProxyPort}")
+                    }
                 }
             }
             add("--psiphon-mode")
-            add(aether.psiphonMode.cliMode)
+            add(effectivePsiphonMode.cliMode)
             add("--psiphon-dir")
             add(File(workDir, "psiphon-cache").absolutePath)
             val psiphonBin = listOf("psiphon-tunnel-core.exe", "libpsiphon.so")
@@ -143,9 +182,27 @@ class AetherArgBuilder @Inject constructor() {
                 add("--psiphon-region")
                 add(aether.psiphonExitCountry.trim())
             }
-            if (aether.psiphonCdnFrontingIps.isNotBlank()) {
+            val cleanCdnIps = normalizeCliCsvTokens(aether.psiphonCdnFrontingIps)
+            if (cleanCdnIps.isNotBlank()) {
                 add("--psiphon-cdn-ips")
-                add(aether.psiphonCdnFrontingIps.trim())
+                add(cleanCdnIps)
+            }
+            val cleanCdnSni = normalizeCliCsvTokens(aether.psiphonCdnSniHostnames)
+            if (cleanCdnSni.isNotBlank()) {
+                add("--psiphon-cdn-sni")
+                add(cleanCdnSni)
+            }
+            val defaultAkamaiSet = if (effectivePsiphonMode == PsiphonChainMode.STANDALONE_CDN &&
+                aether.psiphonCdnSets.isBlank() &&
+                cleanCdnIps.isBlank()
+            ) {
+                "psiphon-akamai"
+            } else {
+                normalizeCliCsvTokens(aether.psiphonCdnSets)
+            }
+            if (defaultAkamaiSet.isNotBlank()) {
+                add("--psiphon-cdn-sets")
+                add(defaultAkamaiSet)
             }
         } else if (useTor) {
             add("--bind")
@@ -195,10 +252,14 @@ class AetherArgBuilder @Inject constructor() {
             return@buildList
         }
 
-        val effectiveProto = when (appSettings.activePreset) {
-            OneTapPreset.WARP_FAST_MASQUE_H2, OneTapPreset.WARP_TO_PSIPHON, OneTapPreset.WARP_TO_TOR -> AetherProtocol.MASQUE
-            OneTapPreset.WG_OVER_MASQUE -> AetherProtocol.WIREGUARD_OVER_MASQUE
-            OneTapPreset.MASQUE_IN_MASQUE -> AetherProtocol.MASQUE_IN_MASQUE
+        val effectiveProto = if (psiphonReverse) {
+            AetherProtocol.MASQUE
+        } else {
+            when (appSettings.activePreset) {
+                OneTapPreset.WARP_FAST_MASQUE_H2, OneTapPreset.WARP_TO_PSIPHON, OneTapPreset.PSIPHON_AKAMAI_CDN, OneTapPreset.WARP_TO_TOR -> AetherProtocol.MASQUE
+                OneTapPreset.WG_OVER_MASQUE -> AetherProtocol.WIREGUARD_OVER_MASQUE
+                OneTapPreset.MASQUE_IN_MASQUE -> AetherProtocol.MASQUE_IN_MASQUE
+            }
         }
         add(effectiveProto.cliFlag)
 
@@ -207,8 +268,10 @@ class AetherArgBuilder @Inject constructor() {
             effectiveProto == AetherProtocol.WIREGUARD_OVER_MASQUE
 
         if (usesMasque) {
-            val transport = if (appSettings.activePreset == OneTapPreset.WARP_FAST_MASQUE_H2 ||
-                appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON
+            val transport = if (psiphonReverse ||
+                appSettings.activePreset == OneTapPreset.WARP_FAST_MASQUE_H2 ||
+                appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON ||
+                appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN
             ) {
                 MasqueTransport.HTTP2
             } else {

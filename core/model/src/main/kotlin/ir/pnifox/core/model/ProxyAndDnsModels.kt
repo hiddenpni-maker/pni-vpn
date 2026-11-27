@@ -128,6 +128,20 @@ enum class ScanSpeedTier(val badge: String, val labelEn: String) {
     C("C", "Fallback"),
 }
 
+@Serializable
+enum class ScanStyle(
+    val labelEn: String,
+    val labelFa: String,
+    val concurrency: Int,
+    val quickTimeoutMs: Int,
+    val deepAttempts: Int,
+    val ports: List<Int>,
+) {
+    TURBO_FAST("Turbo Fast (64x)", "فوق‌سریع (۶۴ رشته)", concurrency = 64, quickTimeoutMs = 1100, deepAttempts = 2, ports = listOf(443)),
+    BALANCED_TLS("Balanced TLS + Ping", "متعادل (TLS + پینگ)", concurrency = 40, quickTimeoutMs = 1500, deepAttempts = 3, ports = listOf(443)),
+    DEEP_MULTIPORT("Deep Multi-Port (443/8443/2096)", "عمیق چندپورتی (۴۴۳/۸۴۴۳/۲۰۹۶)", concurrency = 48, quickTimeoutMs = 1400, deepAttempts = 2, ports = listOf(443, 8443, 2053, 2096)),
+}
+
 enum class ScanCategoryFilter(val labelEn: String, val labelFa: String) {
     ALL("All Ranked", "همه"),
     ULTRA_FAST("Ultra Fast (<130ms)", "پرسرعت (<130ms)"),
@@ -236,6 +250,7 @@ data class AppSettings(
     val customBlockRules: String = "",
     val pauseTelemetryOnScreenOff: Boolean = true,
     val telegramUrl: String = "https://t.me/otaqe_pni",
+    val autoReconnectOnNetworkChange: Boolean = true,
     val hasSelectedLanguage: Boolean = false,
     val hasPromptedTelegramJoin: Boolean = false,
     val autoCheckUpdates: Boolean = true,

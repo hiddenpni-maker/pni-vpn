@@ -11,6 +11,7 @@ import ir.pnifox.core.model.ExitNode
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.TransportMode
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -248,5 +249,54 @@ class AetherArgBuilderTest {
 
         val stats = MhrConfigBuilder.parseStatsJson("""{"today_calls":120,"today_bytes":4096,"today_key":"2026-11-26","today_reset_secs":3600}""")
         assertTrue(stats?.todayCalls == 120L && stats.todayBytes == 4096L)
+    }
+
+    @Test
+    fun `shir o khorshid akamai cdn fronting emits standalone cdn ips sni and psiphon-akamai set`() {
+        val args = builder.buildRunArgs(
+            appSettings = AppSettings(
+                activePreset = OneTapPreset.PSIPHON_AKAMAI_CDN,
+                exitNode = ir.pnifox.core.model.ExitNode.PSIPHON,
+            ),
+            aether = AetherSettings(
+                psiphonEnabled = true,
+                psiphonMode = ir.pnifox.core.model.PsiphonChainMode.STANDALONE_CDN,
+                psiphonCdnFrontingIps = "23.1.2.3\n104.64.5.6, 23.1.2.3",
+                psiphonCdnSniHostnames = "edge1.example.com\nedge2.example.com",
+                psiphonCdnSets = "",
+            ),
+            nativeDir = "/data/app/lib/arm64",
+            workDir = File("/data/local/aether"),
+        )
+        assertTrue(args.contains("--psiphon-only"))
+        assertTrue(args.contains("--psiphon-mode"))
+        assertEquals("cdn", args[args.indexOf("--psiphon-mode") + 1])
+        assertEquals("23.1.2.3,104.64.5.6", args[args.indexOf("--psiphon-cdn-ips") + 1])
+        assertEquals("edge1.example.com,edge2.example.com", args[args.indexOf("--psiphon-cdn-sni") + 1])
+        // When CDN sets is blank and custom IPs were supplied, no forced psiphon-akamai override is needed unless requested,
+        // and when IPs are blank psiphon-akamai defaults automatically:
+        val autoAkamaiArgs = builder.buildRunArgs(
+            appSettings = AppSettings(activePreset = OneTapPreset.PSIPHON_AKAMAI_CDN),
+            aether = AetherSettings(
+                psiphonEnabled = true,
+                psiphonMode = ir.pnifox.core.model.PsiphonChainMode.STANDALONE_CDN,
+            ),
+            nativeDir = "/data/app/lib/arm64",
+            workDir = File("/data/local/aether"),
+        )
+        assertEquals("psiphon-akamai", autoAkamaiArgs[autoAkamaiArgs.indexOf("--psiphon-cdn-sets") + 1])
+
+        val reverseArgs = builder.buildRunArgs(
+            appSettings = AppSettings(),
+            aether = AetherSettings(
+                psiphonEnabled = true,
+                psiphonMode = ir.pnifox.core.model.PsiphonChainMode.PSIPHON_TO_WARP,
+            ),
+            nativeDir = "/data/app/lib/arm64",
+            workDir = File("/data/local/aether"),
+        )
+        assertTrue(reverseArgs.contains("--psiphon-reverse"))
+        assertTrue(reverseArgs.contains("--masque"))
+        assertTrue(reverseArgs.contains("--h2"))
     }
 }

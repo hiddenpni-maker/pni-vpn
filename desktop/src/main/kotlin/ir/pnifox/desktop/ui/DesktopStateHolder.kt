@@ -16,8 +16,10 @@ import ir.pnifox.core.model.MhrDefaultSniPool
 import ir.pnifox.core.model.MhrMode
 import ir.pnifox.core.model.MhrSettings
 import ir.pnifox.core.model.MhrSniTestResult
+import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.ProxyProfile
 import ir.pnifox.core.model.ProxyProtocol
+import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.ScenarioProfile
 import ir.pnifox.core.model.SubscriptionGroup
@@ -95,7 +97,7 @@ data class DesktopUiState(
     val isFetchingEch: Boolean = false,
     val isSmartConnecting: Boolean = false,
     val smartConnectStatus: String = "",
-    val appVersion: String = "2.1.0",
+    val appVersion: String = "2.2.0",
 )
 
 private data class RuntimeUiFlags(
@@ -216,7 +218,7 @@ class DesktopStateHolder {
     init {
         if (store.stateFlow.value.appSettings.autoCheckUpdates) {
             scope.launch {
-                val res = updateChecker.checkLatestRelease("2.1.0")
+                val res = updateChecker.checkLatestRelease("2.2.0")
                 flags.value = flags.value.copy(updateState = res)
                 if (res is UpdateCheckState.UpdateAvailable &&
                     res.info.latestTag != store.stateFlow.value.appSettings.lastDismissedUpdateTag
@@ -291,6 +293,12 @@ class DesktopStateHolder {
                 protocol = profile.recommendedAetherProtocol,
                 masqueTransport = if (profile.recommendedQuicV2) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
                 psiphonEnabled = profile.recommendedPsiphon,
+                psiphonMode = profile.recommendedPsiphonMode ?: it.psiphonMode,
+                psiphonCdnSets = if (profile.recommendedPsiphonMode == PsiphonChainMode.STANDALONE_CDN && it.psiphonCdnSets.isBlank()) {
+                    "psiphon-akamai"
+                } else {
+                    it.psiphonCdnSets
+                },
                 torEnabled = false,
                 noizeProfile = profile.recommendedNoiseProfile,
                 echEnabled = profile.recommendedEch,
@@ -754,18 +762,26 @@ class DesktopStateHolder {
     }
 
     // CDN Scanner
-    fun startScan(provider: String, cidrFile: String, customTargets: String, sni: String, sampleCount: Int) {
+    fun startScan(
+        provider: String,
+        cidrFile: String,
+        customTargets: String,
+        sni: String,
+        sampleCount: Int,
+        style: ir.pnifox.core.model.ScanStyle = ir.pnifox.core.model.ScanStyle.TURBO_FAST,
+    ) {
         if (flags.value.isScanning) return
         scanJob = scope.launch {
-            flags.value = flags.value.copy(isScanning = true, scanResults = emptyList(), scanProgressText = "Scanning $provider...")
+            flags.value = flags.value.copy(isScanning = true, scanResults = emptyList(), scanProgressText = "Sampling diverse $provider subnets (${style.labelEn})...")
             val results = controller.runCdnScan(
                 provider = provider,
                 cidrResource = cidrFile,
                 customTargets = customTargets,
                 sni = sni,
                 count = sampleCount,
+                style = style,
                 onProgress = { p ->
-                    flags.value = flags.value.copy(scanProgressText = "Tested ${p.tested}/${p.total} • Healthy: ${p.healthy}")
+                    flags.value = flags.value.copy(scanProgressText = "Probed ${p.tested}/${p.total} • Healthy: ${p.healthy}")
                 },
                 onResult = { res ->
                     val merged = (flags.value.scanResults + res).sortedByDescending { it.score }
@@ -775,7 +791,7 @@ class DesktopStateHolder {
             flags.value = flags.value.copy(
                 isScanning = false,
                 scanResults = results,
-                scanProgressText = "Finished: ${results.size} clean IPs found.",
+                scanProgressText = "Finished: ${results.size} diverse healthy IPs found.",
             )
         }
     }
@@ -793,6 +809,66 @@ class DesktopStateHolder {
         setBanner("Applied clean endpoint $ip:$port to AETHER!")
     }
 
+    fun applyScannedIpsToPsiphonCdn(ips: List<String>, provider: String) {
+        val cleaned = ips.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (cleaned.isEmpty()) return
+        val existing = store.stateFlow.value.aetherSettings.psiphonCdnFrontingIps
+            .split(',', ';', '\n', ' ')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        val merged = (cleaned + existing).distinct().take(60).joinToString(", ")
+        store.updateAppSettings {
+            it.copy(
+                activeSection = ActiveSectionEngine.AETHER,
+                activePreset = OneTapPreset.PSIPHON_AKAMAI_CDN,
+                exitNode = ExitNode.PSIPHON,
+            )
+        }
+        store.updateAetherSettings {
+            it.copy(
+                psiphonEnabled = true,
+                psiphonMode = PsiphonChainMode.STANDALONE_CDN,
+                psiphonCdnFrontingIps = merged,
+                psiphonCdnSets = if (provider.equals("akamai", true)) "psiphon-akamai" else it.psiphonCdnSets,
+                torEnabled = false,
+            )
+        }
+        setBanner("Applied ${cleaned.size} $provider edge IP(s) to Shir-o-Khorshid Akamai/CDN Fronting ✓")
+        selectTab(DesktopTab.AETHER)
+    }
+
+    fun testAndSortPsiphonCdnEdges() {
+        if (flags.value.isScanning) return
+        val aether = store.stateFlow.value.aetherSettings
+        val rawIps = aether.psiphonCdnFrontingIps
+        if (rawIps.isBlank()) {
+            setBanner("Enter Akamai / CDN edge IPs or CIDRs first (or enable 'psiphon-akamai' CDN set).")
+            return
+        }
+        scope.launch {
+            flags.value = flags.value.copy(isScanning = true, statusBanner = "Testing CDN edge IPs on TCP/TLS :443...")
+            val sni = aether.psiphonCdnSniHostnames.split(',', ';', '\n', ' ').firstOrNull { it.isNotBlank() }.orEmpty()
+            val expanded = ir.pnifox.core.vpn.JvmCdnScanner.expandCidrs(rawIps.split(',', ';', '\n', ' '), 60)
+            val results = ir.pnifox.core.vpn.JvmCdnScanner.scanIps(
+                ips = expanded,
+                port = 443,
+                provider = "psiphon-cdn",
+                sni = sni,
+                attempts = 2,
+                timeoutMs = 2200,
+                concurrency = 20,
+            )
+            flags.value = flags.value.copy(isScanning = false)
+            if (results.isEmpty()) {
+                setBanner("None of ${expanded.size} CDN edge IPs responded on :443. Built-in psiphon-akamai set will be used.")
+            } else {
+                val sortedList = results.sortedBy { it.latencyMs }.map { it.ip }.distinct()
+                store.updateAetherSettings { it.copy(psiphonCdnFrontingIps = sortedList.joinToString(", ")) }
+                setBanner("${results.size}/${expanded.size} CDN IPs reachable (fastest: ${sortedList.first()} @ ${results.minOf { it.latencyMs }}ms) ✓")
+            }
+        }
+    }
+
     fun refreshLanIps() {
         flags.value = flags.value.copy(lanIps = LanNetworkHelper.detectLocalIpv4Addresses())
     }
@@ -801,7 +877,7 @@ class DesktopStateHolder {
         if (flags.value.updateState is UpdateCheckState.Checking) return
         scope.launch {
             flags.value = flags.value.copy(updateState = UpdateCheckState.Checking)
-            val res = updateChecker.checkLatestRelease("2.1.0")
+            val res = updateChecker.checkLatestRelease("2.2.0")
             flags.value = flags.value.copy(updateState = res)
         }
     }

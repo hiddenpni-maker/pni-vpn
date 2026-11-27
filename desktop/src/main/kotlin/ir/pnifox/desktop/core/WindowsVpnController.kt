@@ -24,6 +24,7 @@ import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.ProxyProfile
 import ir.pnifox.core.model.ProxyProtocol
 import ir.pnifox.core.model.PnifoxScenarioCatalog
+import ir.pnifox.core.model.ScanStyle
 import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.vpn.AetherArgBuilder
@@ -71,6 +72,7 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -117,6 +119,8 @@ class WindowsVpnController(
 
     @Volatile private var connectJob: Job? = null
     @Volatile private var trafficJob: Job? = null
+    @Volatile private var watchdogJob: Job? = null
+    @Volatile private var userRequestedDisconnect = false
     @Volatile private var coreProcess: Process? = null
     @Volatile private var secondaryProcess: Process? = null
     @Volatile private var gatewayProcess: Process? = null
@@ -182,6 +186,8 @@ class WindowsVpnController(
 
     fun startConnection(section: ActiveSectionEngine) {
         if (_tunnelState.value is TunnelState.Connecting) return
+        userRequestedDisconnect = false
+        watchdogJob?.cancel()
         connectJob?.cancel()
         connectJob = scope.launch {
             executeConnection(section)
@@ -282,8 +288,7 @@ class WindowsVpnController(
                                 bypassIps += ip
                                 activeEndpointLabel = "$ip:$port"
                                 if (aether.scanForEndpoint || aether.endpointIp.isBlank()) {
-                                    store.updateAetherSettings { cur -> cur.copy(endpointIp = ip, endpointPort = port, scanForEndpoint = false) }
-                                    logs.append("AETHER", LogLevel.INFO, "Saved endpoint $ip:$port for future fast connects")
+                                    logs.append("AETHER", LogLevel.INFO, "Discovered diverse endpoint $ip:$port (auto-scan stays enabled)")
                                 }
                             },
                             onLastLine = { lastLogLine = it },
@@ -379,6 +384,9 @@ class WindowsVpnController(
                     disconnectSync(updateState = false)
                     _tunnelState.value = TunnelState.Error(section, err)
                     logs.append("Controller", LogLevel.ERROR, "Core failed: ${lastLogLine.ifBlank { err.toString() }}")
+                    if (!fastScan && !userRequestedDisconnect && app.autoReconnectOnNetworkChange && isRetryableConnectionError(err)) {
+                        scheduleAutoRecovery(section, lastLogLine.ifBlank { err.toString() })
+                    }
                     return@withLock
                 }
 
@@ -483,6 +491,10 @@ class WindowsVpnController(
                 )
                 _tunnelState.value = connected
 
+                if (!fastScan) {
+                    startConnectionWatchdog(section)
+                }
+
                 delay(800L)
                 refreshActiveRealDelay()
             }
@@ -510,14 +522,8 @@ class WindowsVpnController(
         )
         val innerApp = app.copy(allowLan = false)
 
-        val usesPsiphon = innerAether.psiphonEnabled ||
-            app.exitNode == ExitNode.PSIPHON ||
-            app.activePreset == OneTapPreset.WARP_TO_PSIPHON
-        val usesTor = !usesPsiphon && (
-            innerAether.torEnabled ||
-                app.exitNode == ExitNode.TOR ||
-                app.activePreset == OneTapPreset.WARP_TO_TOR
-            )
+        val usesPsiphon = argBuilder.isPsiphonActive(innerApp, innerAether)
+        val usesTor = argBuilder.isTorActive(innerApp, innerAether)
 
         val routesFile = argBuilder.writeRoutesFileIfNeeded(innerApp, dir)
         val effectiveAether = if (innerAether.echEnabled && innerAether.smartEchBootstrap && innerAether.echBase64Override.isBlank()) {
@@ -1109,6 +1115,7 @@ class WindowsVpnController(
         customTargets: String,
         sni: String,
         count: Int,
+        style: ScanStyle = ScanStyle.TURBO_FAST,
         onProgress: (JvmScanProgress) -> Unit,
         onResult: (JvmScanCandidateResult) -> Unit,
     ): List<JvmScanCandidateResult> {
@@ -1118,24 +1125,187 @@ class WindowsVpnController(
             coreLocator.readBundledResourceText("scanner/$cidrResource").lines()
         }
         val ips = JvmCdnScanner.expandCidrs(cidrs, count.coerceIn(10, 400))
-        val port = if (provider.equals("warp", ignoreCase = true)) 2408 else 443
-        return JvmCdnScanner.scanIps(
+        val ports = when {
+            provider.equals("warp", ignoreCase = true) && style == ScanStyle.DEEP_MULTIPORT -> listOf(443, 8443, 4443, 2408)
+            provider.equals("warp", ignoreCase = true) -> listOf(2408)
+            style == ScanStyle.DEEP_MULTIPORT -> style.ports
+            else -> listOf(443)
+        }
+        return JvmCdnScanner.scanCandidates(
             ips = ips,
-            port = port,
+            ports = ports,
             provider = provider,
             sni = sni,
-            attempts = 2,
-            timeoutMs = 2500,
-            concurrency = 24,
+            style = style,
+            testTls = true,
+            measureColoAndSpeed = style != ScanStyle.TURBO_FAST,
             onProgress = onProgress,
             onResult = onResult,
         )
     }
 
     fun disconnect() {
+        userRequestedDisconnect = true
+        watchdogJob?.cancel()
+        watchdogJob = null
         connectJob?.cancel()
         connectJob = null
         disconnectSync(updateState = true)
+    }
+
+    private fun isRetryableConnectionError(err: ConnectionError): Boolean =
+        err !is ConnectionError.MissingBinary && err !is ConnectionError.PermissionDenied
+
+    private fun activeNetworkSignature(): String = runCatching {
+        NetworkInterface.getNetworkInterfaces()
+            .asSequence()
+            .filter { iface ->
+                iface.isUp && !iface.isLoopback && !iface.isVirtual &&
+                    !iface.name.contains("wintun", ignoreCase = true) &&
+                    !iface.displayName.contains("wintun", ignoreCase = true) &&
+                    !iface.displayName.contains("pnifox", ignoreCase = true)
+            }
+            .flatMap { iface ->
+                iface.inetAddresses.asSequence()
+                    .filterIsInstance<Inet4Address>()
+                    .map { "${iface.name}:${it.hostAddress}" }
+                    .filterNot { it.contains("172.19.") || it.contains("169.254.") }
+            }
+            .sorted()
+            .joinToString("|")
+    }.getOrDefault("")
+
+    private fun startConnectionWatchdog(section: ActiveSectionEngine) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            var lastSig = activeNetworkSignature()
+            var networkWasOffline = lastSig.isEmpty()
+            var consecutiveProbesFailed = 0
+            var probeTickCounter = 0
+
+            while (isActive && !userRequestedDisconnect) {
+                delay(4000L)
+                if (userRequestedDisconnect) break
+                val settings = store.stateFlow.value.appSettings
+                if (!settings.autoReconnectOnNetworkChange) continue
+
+                val state = _tunnelState.value
+                if (state is TunnelState.Connecting) continue
+                if (state is TunnelState.Disconnected) break
+
+                val curSig = activeNetworkSignature()
+                if (curSig.isEmpty()) {
+                    if (!networkWasOffline) {
+                        networkWasOffline = true
+                        logs.append("Watchdog", LogLevel.WARN, "Internet/network adapter went offline — waiting for network recovery to refresh tunnel...")
+                        _tunnelState.value = TunnelState.Connecting(
+                            section = section,
+                            stageLabelEn = "Network offline — waiting to auto-reconnect...",
+                            stageLabelFa = "اینترنت قطع شد — در انتظار بازگشت برای اتصال مجدد خودکار...",
+                            targetLabel = "",
+                        )
+                    }
+                    continue
+                }
+
+                if (networkWasOffline || (lastSig.isNotEmpty() && curSig != lastSig)) {
+                    val reason = if (networkWasOffline) "Internet restored ($curSig)" else "Network switched ($lastSig -> $curSig)"
+                    logs.append("Watchdog", LogLevel.INFO, "$reason — refreshing tunnel automatically...")
+                    if (section == ActiveSectionEngine.AETHER && store.stateFlow.value.aetherSettings.endpointIp.isNotBlank()) {
+                        store.updateAetherSettings { it.copy(scanForEndpoint = true, endpointIp = "") }
+                    }
+                    connectJob?.cancel()
+                    connectJob = scope.launch { executeConnection(section) }
+                    return@launch
+                }
+                lastSig = curSig
+
+                val expectedGateway = (section != ActiveSectionEngine.MHR || !store.stateFlow.value.mhrSettings.proxyOnly)
+                val coreDead = coreProcess?.let { !it.isAlive } ?: false
+                val gwDead = expectedGateway && (gatewayProcess?.let { !it.isAlive } ?: false)
+                if (coreDead || gwDead) {
+                    logs.append("Watchdog", LogLevel.WARN, "Core/Gateway process exited unexpectedly — auto-reconnecting...")
+                    if (section == ActiveSectionEngine.AETHER) {
+                        store.updateAetherSettings { it.copy(scanForEndpoint = true, endpointIp = "") }
+                    }
+                    connectJob?.cancel()
+                    connectJob = scope.launch { executeConnection(section) }
+                    return@launch
+                }
+
+                // Periodic light check (~24s) to recover seamlessly from silent ISP drop while adapter stays up
+                probeTickCounter++
+                if (probeTickCounter >= 6 && state is TunnelState.Connected) {
+                    probeTickCounter = 0
+                    val ms = refreshActiveRealDelay()
+                    if (ms == null) {
+                        consecutiveProbesFailed++
+                        if (consecutiveProbesFailed >= 2) {
+                            logs.append("Watchdog", LogLevel.WARN, "Tunnel stalled across consecutive checks while internet is UP — refreshing connection...")
+                            if (section == ActiveSectionEngine.AETHER) {
+                                store.updateAetherSettings { it.copy(scanForEndpoint = true, endpointIp = "") }
+                            }
+                            connectJob?.cancel()
+                            connectJob = scope.launch { executeConnection(section) }
+                            return@launch
+                        }
+                    } else {
+                        consecutiveProbesFailed = 0
+                    }
+                }
+            }
+        }
+    }
+
+    private fun scheduleAutoRecovery(section: ActiveSectionEngine, reason: String) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            var attempt = 0
+            while (isActive && !userRequestedDisconnect && store.stateFlow.value.appSettings.autoReconnectOnNetworkChange) {
+                attempt++
+                val sig = activeNetworkSignature()
+                if (sig.isEmpty()) {
+                    _tunnelState.value = TunnelState.Connecting(
+                        section = section,
+                        stageLabelEn = "Waiting for internet to return before reconnecting...",
+                        stageLabelFa = "در انتظار برقراری اینترنت برای اتصال مجدد خودکار...",
+                        targetLabel = "",
+                    )
+                    delay(3000L)
+                    continue
+                }
+                val waitMs = when (attempt) {
+                    1 -> 3000L
+                    2 -> 7000L
+                    3 -> 15000L
+                    else -> 25000L
+                }
+                logs.append("Watchdog", LogLevel.INFO, "Auto-reconnect attempt #$attempt in ${waitMs / 1000}s (last reason: ${reason.take(80)})")
+                delay(waitMs)
+                if (userRequestedDisconnect) return@launch
+                if (section == ActiveSectionEngine.AETHER) {
+                    store.updateAetherSettings { it.copy(scanForEndpoint = true, endpointIp = "") }
+                }
+                executeConnection(section)
+                if (_tunnelState.value is TunnelState.Connected) return@launch
+                if (attempt >= 5) {
+                    logs.append("Watchdog", LogLevel.WARN, "Paused auto-retries after 5 attempts; will auto-retry when network changes.")
+                    var baseline = activeNetworkSignature()
+                    while (isActive && !userRequestedDisconnect && store.stateFlow.value.appSettings.autoReconnectOnNetworkChange) {
+                        delay(4000L)
+                        val nowSig = activeNetworkSignature()
+                        if (nowSig.isNotEmpty() && nowSig != baseline) {
+                            logs.append("Watchdog", LogLevel.INFO, "Network changed ($nowSig) — resuming auto-reconnect...")
+                            connectJob?.cancel()
+                            connectJob = scope.launch { executeConnection(section) }
+                            return@launch
+                        }
+                        if (nowSig.isEmpty()) baseline = ""
+                    }
+                    return@launch
+                }
+            }
+        }
     }
 
     fun disconnectSync(updateState: Boolean = true) {

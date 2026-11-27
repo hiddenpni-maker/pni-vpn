@@ -178,7 +178,9 @@ class AetherArgBuilder @Inject constructor() {
                 add("--psiphon-server-entries")
                 add(psiphonServersDatPath)
             }
-            if (aether.psiphonExitCountry != "AUTO" && aether.psiphonExitCountry.isNotBlank()) {
+            // Standalone Akamai/CDN auto-selects reachable CDN egresses (e.g. GB/US); passing
+            // incompatible WARP exit codes like CA rejects valid CDN nodes and causes 90s timeouts.
+            if (!psiphonStandalone && aether.psiphonExitCountry != "AUTO" && aether.psiphonExitCountry.isNotBlank()) {
                 add("--psiphon-region")
                 add(aether.psiphonExitCountry.trim())
             }
@@ -252,14 +254,12 @@ class AetherArgBuilder @Inject constructor() {
             return@buildList
         }
 
+        // Honor user-selected protocol & MASQUE transport directly so users can combine
+        // Protocol + Transport + optional Psiphon/Tor chain without preset overrides fighting them.
         val effectiveProto = if (psiphonReverse) {
             AetherProtocol.MASQUE
         } else {
-            when (appSettings.activePreset) {
-                OneTapPreset.WARP_FAST_MASQUE_H2, OneTapPreset.WARP_TO_PSIPHON, OneTapPreset.PSIPHON_AKAMAI_CDN, OneTapPreset.WARP_TO_TOR -> AetherProtocol.MASQUE
-                OneTapPreset.WG_OVER_MASQUE -> AetherProtocol.WIREGUARD_OVER_MASQUE
-                OneTapPreset.MASQUE_IN_MASQUE -> AetherProtocol.MASQUE_IN_MASQUE
-            }
+            aether.protocol
         }
         add(effectiveProto.cliFlag)
 
@@ -268,11 +268,7 @@ class AetherArgBuilder @Inject constructor() {
             effectiveProto == AetherProtocol.WIREGUARD_OVER_MASQUE
 
         if (usesMasque) {
-            val transport = if (psiphonReverse ||
-                appSettings.activePreset == OneTapPreset.WARP_FAST_MASQUE_H2 ||
-                appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON ||
-                appSettings.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN
-            ) {
+            val transport = if (psiphonReverse) {
                 MasqueTransport.HTTP2
             } else {
                 aether.masqueTransport

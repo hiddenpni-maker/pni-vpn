@@ -1,5 +1,5 @@
 <div align="center">
-  <h2>PNIFOX v2.2.0 — ویندوز (Windows 10/11) و اندروید</h2>
+  <h2>PNIFOX v2.3.0 — ویندوز و اندروید</h2>
   <p>📢 <strong>کانال تلگرام رسمی / Official Telegram:</strong> <a href="https://t.me/otaqe_pni">https://t.me/otaqe_pni</a> (<code>@otaqe_pni</code>)</p>
 </div>
 
@@ -9,26 +9,23 @@
 
 | پلتفرم / معماری | توضیح انتخاب فایل | فایل |
 | :--- | :--- | :--- |
-| **ویندوز نصب‌کننده (Setup EXE)** | نصبی استاندارد برای Windows 10 و Windows 11 (۶۴ بیتی) | `pnifox-windows-x64-setup.exe` |
+| **ویندوز نصب‌کننده (Setup EXE)** | نصبی استاندارد برای ویندوز ۶۴ بیتی | `pnifox-windows-x64-setup.exe` |
 | **ویندوز پرتابل (Portable ZIP)** | بدون نیاز به نصب — اکسترکت و اجرای مستقیم `pnifox.exe` | `pnifox-windows-x64-portable.zip` |
-| **`arm64-v8a`** *(اندروید پیشنهادی)* | مناسب اکثر گوشی‌های اندروید جدید (۶۴ بیتی) — سبک‌ترین نسخه | `PNI-arm64-v8a.apk` |
+| **`arm64-v8a`** *(اندروید پیشنهادی)* | مناسب اکثر گوشی‌های اندروید جدید (۶۴ بیتی) | `PNI-arm64-v8a.apk` |
 | **`armeabi-v7a`** *(اندروید قدیمی‌تر)* | مناسب گوشی‌ها و تبلت‌های ۳۲ بیتی | `PNI-armeabi-v7a.apk` |
 | **`x86_64`** *(شبیه‌ساز / تبلت)* | مناسب شبیه‌سازها و دستگاه‌های اینتل/AMD | `PNI-x86_64.apk` |
 | **`universal`** *(همگانی)* | شامل تمام معماری‌های اندروید در یک فایل | `PNI-universal.apk` |
 
-*(تمام لینک‌های مستقیم دانلود در بخش **Assets** همین صفحه Release قرار دارند.)*
-
 ---
 
-### ✨ قابلیت‌های کلیدی نسخه v2.2.0
-* **روش شیر و خورشید — فرانتینگ Akamai / CDN در Psiphon:** پشتیبانی از `--psiphon-only --psiphon-mode cdn|direct|auto`، معکوس `Psiphon CDN → WARP` (`--psiphon-reverse`)، انتخاب پکیج‌های CDN (`psiphon-akamai`, `cloudflare`, `fastly`, ...), وارد کردن و تست رنج/آی‌پی‌های لبه Akamai و فهرست دلخواه `CDN SNI hostnames` + اعمال مستقیم از اسکنر Akamai.
-* **اسکنر فوق‌سریع و متنوع چندزیرشبکه‌ای (Multi-Subnet):** اصلاح باگ قفل‌شدن اسکنر روی یک رنج و افزودن اسکن دوفازی ۶۴ رشته‌ای (`Turbo Fast 64x`، `Balanced TLS`، `Deep Multi-Port`) با پوشش تمام پیشوندهای CIDR (`/8` تا `/24`)؛ اندپوینت AETHER هم دیگر روی یک آی‌پی قفل نمی‌ماند و آزادانه رنج‌های متنوع را اسکن می‌کند.
-* **اتصال مجدد و رفرش خودکار هنگام قطع و وصل اینترنت:** پایش تغییرات شبکه (Android `NetworkCallback` و Windows Adapter + Process + Health Watchdog) تا هنگام قطع و وصل اینترنت یا تغییر وای‌فای/دیتا، بدون نیاز به خاموش و روشن دستی کاربر، تونل رفرش و مجدداً متصل شود.
-* **بخش گیم و حالت‌های آماده کاربردی (Gaming & Scenarios):** تغییر DNS گیمینگ ضدتحریم بدون افت پینگ (رادار، بگذر، ۴۰۳، شکن، الکترو)، ضدDPI محلی بدون نیاز به سرور، تونل UDP/QUIC v2 گیمینگ و سناریوهای آماده برای گیم، استریم، وب‌گردی و هوش مصنوعی (جمنای/ChatGPT).
-* **بهینه‌سازی WinTUN و پیش‌فرض ECH:** رفع کامل حلقه DNS در ویندوز (بایپس پردازه‌های هسته و مسیریابی مستقیم DNS Changer)، خاموش کردن پیش‌فرض ECH آزمایشی، پشتیبانی از پروتکل‌های جدید `tuic://`، `anytls://`، `xhttp` و `ss2022` و لوگوی جدید پنجه در ویندوز و اندروید.
+### ✨ تغییرات نسخه v2.3.0
+* **رفع مشکل اتصال Akamai CDN و جداسازی از رنج‌های WARP/کشور:** در حالت `Akamai / Psiphon CDN (مستقل)` دیگر پرچم `--psiphon-region` مربوط به WARP/سایفون (که باعث تایم‌اوت هنگام انتخاب کشورهایی مثل `CA` می‌شد) ارسال نمی‌شود و بخش اکامای کاملاً مجزا از WARP است.
+* **تفکیک کامل پروتکل، نوع انتقال و زنجیره سایفون/تور:** انتخاب مستقل `Protocol` (`MASQUE`, `WireGuard`, `WG over MASQUE`, ...) و `Transport` (`HTTP/2`, `HTTP/3`) و فعال‌سازی اختیاری زنجیره سایفون یا تور روی آن بدون تداخل گزینه‌ها.
+* **رابط کاربری جمع‌وجور با منوهای کشویی و دکمه «توضیحات»:** جایگزینی لیست‌های شلوغ چیپ‌ها (کشورها، پروتکل، اسکن، گیمینگ، DNS) با منوهای کشویی مرتب، مخفی‌کردن توضیحات طولانی در پنجره بازشوی «توضیحات»، حذف بخش اتصال هوشمند، و رفع بیرون‌زدگی متن‌ها در ویندوز و اندروید.
+* **پاک‌سازی راحت آی‌پی‌های اعمال‌شده + رنج‌های بیشتر اسکنر:** افزودن دکمه یک‌ضرب «پاک کردن IP» در صفحه اصلی و اسکنر هر دو نسخه، همراه با گسترش رنج‌های پیش‌فرض IPv4 برای اسکن WARP/Cloudflare و Fastly.
 
-### 🇬🇧 Highlights (v2.2.0)
-* **Shir-o-Khorshid Akamai / CDN Fronting Modes:** Standalone Psiphon CDN/Direct/Auto (`--psiphon-only`), Reverse WARP-over-Psiphon (`--psiphon-reverse`), CDN set selectors (`psiphon-akamai`, Cloudflare, Fastly, CloudFront, ...), custom Edge IP/CIDR ranking, custom `CDN SNI hostnames`, and direct export from the Akamai Scanner.
-* **High-Diversity Two-Phase 64-Worker Scanner:** Fixed subnet lock-in across `/8`–`/24` CIDRs with shuffled multi-prefix sampling + `Turbo Fast (64x)`, `Balanced TLS`, and `Deep Multi-Port` scan profiles; AETHER auto-scan no longer silently pins a single IP.
-* **Automatic Internet Drop Recovery:** Native Android `ConnectivityManager.NetworkCallback` + Windows adapter/process/health watchdog automatically refreshes and reconnects tunnels when internet drops and comes back.
-* **Gaming Hub, Goal Scenarios, Modern Protocols & Fixes:** Anti-sanction Gaming DNS (0ms proxy overhead), Local DPI Desync, `tuic://`/`anytls://`/`xhttp`/`ss2022`, ECH off by default, clean WinTUN routing, and new pnifox paw icon.
+### 🇬🇧 Highlights (v2.3.0)
+* **Fixed Akamai / Psiphon CDN Handshake & Clean Separation:** Standalone Akamai CDN mode is separated cleanly from WARP and no longer passes incompatible `--psiphon-region` overrides (like `CA`) that blocked valid `GB`/`US` CDN egress nodes.
+* **Independent Protocol + Transport + Exit Chain:** Choose `Protocol` (`MASQUE`, `WireGuard`, `WG over MASQUE`, ...) and `Transport` (`HTTP/2`, `HTTP/3`) freely and chain Psiphon/Tor on top without preset overrides fighting your selection.
+* **Compact Dropdown Menus & On-Demand Info Popups:** Consolidated scattered chip grids across Desktop & Android into compact dropdown menus, moved verbose guides into on-demand **Info / توضیحات** dialogs, removed Smart Connect, and fixed button/label clipping.
+* **One-Tap Clear Applied IPs & Expanded Default Scanner Ranges:** Added quick clear buttons for saved Endpoint & Akamai CDN IPs and expanded default WARP/Cloudflare and Fastly CIDR scan ranges.

@@ -19,10 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -60,6 +63,7 @@ import ir.pnifox.core.model.ScanStyle
 import ir.pnifox.core.ui.LocalAppLanguage
 import ir.pnifox.core.ui.PnifoxBadgePill
 import ir.pnifox.core.ui.PnifoxCard
+import ir.pnifox.core.ui.PnifoxDropdownField
 import ir.pnifox.core.ui.PnifoxSectionLabel
 import ir.pnifox.core.ui.PnifoxSwitchRow
 import ir.pnifox.core.ui.ResponsiveScreenContainer
@@ -91,25 +95,43 @@ fun ScannerRoute(
                 )
             }
 
-            // Provider Pills
+            // Provider & Scan Style Compact Dropdowns
             item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(ScanProvider.entries) { provider ->
-                        FilterChip(
-                            selected = state.provider == provider,
-                            onClick = { viewModel.selectProvider(provider) },
-                            label = { Text(if (isFa) provider.labelFa else provider.labelEn, maxLines = 1) },
-                        )
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PnifoxDropdownField(
+                        label = "CDN",
+                        selectedText = if (isFa) state.provider.labelFa else state.provider.labelEn,
+                        options = ScanProvider.entries,
+                        selectedItem = state.provider,
+                        optionLabel = { if (isFa) it.labelFa else it.labelEn },
+                        onSelect = viewModel::selectProvider,
+                        icon = Icons.Rounded.Radar,
+                        modifier = Modifier.weight(1f),
+                    )
+                    PnifoxDropdownField(
+                        label = tr("Style", "سبک"),
+                        selectedText = if (isFa) state.scanStyle.labelFa else state.scanStyle.labelEn,
+                        options = ScanStyle.entries,
+                        selectedItem = state.scanStyle,
+                        optionLabel = { if (isFa) it.labelFa else it.labelEn },
+                        onSelect = viewModel::setScanStyle,
+                        icon = Icons.Rounded.Tune,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                Spacer(Modifier.height(6.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(ScanStyle.entries) { style ->
-                        FilterChip(
-                            selected = state.scanStyle == style,
-                            onClick = { viewModel.setScanStyle(style) },
-                            label = { Text(if (isFa) style.labelFa else style.labelEn, maxLines = 1) },
-                        )
+                if (state.hasAppliedIps) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = viewModel::clearAllAppliedIps,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Rounded.Clear, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(tr("Clear Applied IPs", "پاک کردن IPهای اعمال‌شده"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

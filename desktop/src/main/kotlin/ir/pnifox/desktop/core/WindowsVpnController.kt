@@ -39,9 +39,7 @@ import ir.pnifox.core.vpn.LocalDpiDesyncServer
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.MhrConfigBuilder
 import ir.pnifox.core.vpn.RealDelaySocketProber
-import ir.pnifox.core.vpn.SmartConnectOrchestrator
 import ir.pnifox.core.vpn.SniSpoofServer
-import ir.pnifox.core.vpn.StrategyArm
 import ir.pnifox.desktop.model.WindowsBinaryStatus
 import ir.pnifox.desktop.model.WindowsTunnelMode
 import ir.pnifox.desktop.storage.WindowsStore
@@ -523,6 +521,9 @@ class WindowsVpnController(
         val innerApp = app.copy(allowLan = false)
 
         val usesPsiphon = argBuilder.isPsiphonActive(innerApp, innerAether)
+        val psiphonStandalone = usesPsiphon && (
+            innerAether.psiphonMode.isStandalone || innerApp.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN
+        )
         val usesTor = argBuilder.isTorActive(innerApp, innerAether)
 
         val routesFile = argBuilder.writeRoutesFileIfNeeded(innerApp, dir)
@@ -555,7 +556,10 @@ class WindowsVpnController(
 
         val cmd = listOf(bin.absolutePath) + args
         logs.append("AETHER", LogLevel.INFO, WindowsSecurityHelper.sanitizeLogLine("Launching: ${cmd.joinToString(" ")}"))
-        onStage("AETHER handshaking (MASQUE / WARP)...", "در حال برقراری اتصال AETHER...")
+        onStage(
+            if (psiphonStandalone) "Dialing Akamai / Psiphon CDN..." else "AETHER handshaking (MASQUE / WARP)...",
+            if (psiphonStandalone) "در حال اتصال از طریق Akamai CDN..." else "در حال برقراری اتصال AETHER...",
+        )
 
         val pb = ProcessBuilder(cmd).directory(bin.parentFile).redirectErrorStream(true)
         val curPath = pb.environment()["PATH"].orEmpty()
@@ -569,12 +573,15 @@ class WindowsVpnController(
         val peerPattern = Regex("""(\d{1,3}(?:\.\d{1,3}){3}):(\d+)""")
         pumpProcessOutput("AETHER", proc) { line ->
             onLastLine(line)
-            if (line.contains("registering", ignoreCase = true) || line.contains("no warp identity", ignoreCase = true)) {
+            if (!psiphonStandalone && (line.contains("registering", ignoreCase = true) || line.contains("no warp identity", ignoreCase = true))) {
                 onStage("Registering WARP identity...", "در حال ثبت هویت WARP...")
-            } else if (line.contains("scanning", ignoreCase = true)) {
+            } else if (!psiphonStandalone && line.contains("scanning", ignoreCase = true)) {
                 onStage("Scanning clean WARP endpoints...", "در حال اسکن اندپوینت تمیز...")
             } else if (usesPsiphon && line.contains("psiphon", ignoreCase = true) && !secondaryTunnelReady.get()) {
-                onStage("Dialing Psiphon inside WARP tunnel...", "در حال اتصال سایفون از داخل تونل WARP...")
+                onStage(
+                    if (psiphonStandalone) "Dialing Akamai / Psiphon CDN..." else "Dialing Psiphon inside WARP tunnel...",
+                    if (psiphonStandalone) "در حال برقراری اتصال Akamai / سایفون..." else "در حال اتصال سایفون از داخل تونل WARP...",
+                )
             } else if (usesTor && line.contains("tor", ignoreCase = true) && !secondaryTunnelReady.get()) {
                 onStage("Bootstrapping Tor inside WARP...", "در حال راه‌اندازی Tor از داخل WARP...")
             }
@@ -914,6 +921,8 @@ class WindowsVpnController(
             null
         } else {
             val persisted = store.stateFlow.value
+            val isDnsProbe = (connected.section == ActiveSectionEngine.DNS && persisted.dnsSettings.engineType == DnsEngineType.DNS_CHANGER) ||
+                (connected.section == ActiveSectionEngine.GAMING && persisted.gamingSettings.mode == GamingMode.DNS_ANTI_SANCTION)
             val rtt = when {
                 connected.section == ActiveSectionEngine.DNS && persisted.dnsSettings.engineType == DnsEngineType.DNS_CHANGER ->
                     RealDelaySocketProber.measureDnsResolverLatencyMs(persisted.dnsSettings)
@@ -928,9 +937,13 @@ class WindowsVpnController(
                 _tunnelState.value = cur.copy(pingMs = rtt)
             }
             if (rtt != null) {
-                logs.append("RealDelay", LogLevel.INFO, "Measured Real HTTP 204 delay: ${rtt}ms")
+                logs.append("RealDelay", LogLevel.INFO, "Measured ${if (isDnsProbe) "DNS" else "HTTP 204"} delay: ${rtt}ms")
             } else {
-                logs.append("RealDelay", LogLevel.WARN, "Real delay probe timed out on :${connected.localSocksPort}")
+                logs.append(
+                    "RealDelay",
+                    LogLevel.WARN,
+                    if (isDnsProbe) "DNS latency probe timed out" else "Real HTTP 204 probe timed out on :${connected.localSocksPort}",
+                )
             }
             rtt
         }
@@ -1463,80 +1476,5 @@ class WindowsVpnController(
         val poisonedCount = results.count { it.isPoisoned }
         logs.append("DNS-E2E", LogLevel.INFO, "Zero-ICMP Port-53 scan complete: $cleanCount clean, $poisonedCount poisoned (10.10.34.x).")
         results
-    }
-
-    suspend fun smartAutoConnect(
-        goal: ScenarioGoalId?,
-        onStatus: (String) -> Unit,
-    ) {
-        connectJob?.cancel()
-        val arms = SmartConnectOrchestrator.rankedArms(goal, store.stateFlow.value.banditStateJson)
-        val topArms = arms.take(3)
-        for ((index, arm) in topArms.withIndex()) {
-            onStatus("Trying ${arm.titleEn} (${index + 1}/${topArms.size})...")
-            logs.append("SmartConnect", LogLevel.INFO, "Bandit arm [${index + 1}/${topArms.size}]: ${arm.titleEn}")
-            val section = applyStrategyArm(arm)
-            val startTime = System.currentTimeMillis()
-            // Await executeConnection directly so we never race ahead of coroutine startup!
-            executeConnection(section, fastScan = true)
-
-            val settled = _tunnelState.value
-            val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(50L)
-            val ok = if (settled is TunnelState.Connected) {
-                val delayMs = refreshActiveRealDelay()
-                delayMs != null || arm == StrategyArm.GAMING_DNS
-            } else {
-                false
-            }
-            val nextJson = SmartConnectOrchestrator.recordOutcome(
-                stateJson = store.stateFlow.value.banditStateJson,
-                arm = arm,
-                success = ok,
-                latencyMs = elapsed,
-            )
-            store.updateBanditState(nextJson)
-            if (ok) {
-                onStatus("Connected via ${arm.titleEn} ✓")
-                return
-            }
-        }
-        onStatus("Smart Auto-Connect tried top strategies without HTTP 204 pass; check logs or switch mode.")
-    }
-
-    private fun applyStrategyArm(arm: StrategyArm): ActiveSectionEngine = when (arm) {
-        StrategyArm.AETHER_MASQUE_H2 -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.DEFAULT) }
-            store.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP2, psiphonEnabled = false, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.AETHER_MASQUE_H3 -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.MASQUE_IN_MASQUE, exitNode = ExitNode.DEFAULT) }
-            store.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP3, quicV2Enabled = true, psiphonEnabled = false, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.AETHER_WG_NOIZE -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.WG_OVER_MASQUE, exitNode = ExitNode.DEFAULT) }
-            store.updateAetherSettings { it.copy(protocol = AetherProtocol.WIREGUARD_OVER_MASQUE, psiphonEnabled = false, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.AETHER_PSIPHON -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.WARP_TO_PSIPHON, exitNode = ExitNode.PSIPHON) }
-            store.updateAetherSettings { it.copy(psiphonEnabled = true, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.LOCAL_DPI_DESYNC -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.GAMING) }
-            store.updateGamingSettings { it.copy(mode = GamingMode.LOCAL_DPI_DESYNC) }
-            ActiveSectionEngine.GAMING
-        }
-        StrategyArm.GAMING_DNS -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.GAMING) }
-            store.updateGamingSettings { it.copy(mode = GamingMode.DNS_ANTI_SANCTION) }
-            ActiveSectionEngine.GAMING
-        }
-        StrategyArm.MHR_RELAY -> {
-            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.MHR) }
-            ActiveSectionEngine.MHR
-        }
     }
 }

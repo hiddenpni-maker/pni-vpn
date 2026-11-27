@@ -22,10 +22,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SportsEsports
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,9 +57,10 @@ import ir.pnifox.core.ui.CoreLogsModalSheet
 import ir.pnifox.core.ui.FoxConnectionMascot
 import ir.pnifox.core.ui.LiveActivityLogPanel
 import ir.pnifox.core.ui.LocalAppLanguage
-import ir.pnifox.core.ui.PnifoxBadgePill
 import ir.pnifox.core.ui.PnifoxCard
 import ir.pnifox.core.ui.PnifoxConnectButton
+import ir.pnifox.core.ui.PnifoxDropdownField
+import ir.pnifox.core.ui.PnifoxInfoPopupButton
 import ir.pnifox.core.ui.PnifoxSectionLabel
 import ir.pnifox.core.ui.PnifoxSwitchRow
 import ir.pnifox.core.ui.ResponsiveScreenContainer
@@ -80,7 +81,6 @@ fun GamingRoute(
     val isFa = LocalAppLanguage.current == AppLanguage.PERSIAN
     val clipboard = LocalClipboardManager.current
     var showLogsSheet by remember { mutableStateOf(false) }
-    var showProtocolGuide by remember { mutableStateOf(false) }
 
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
@@ -112,6 +112,14 @@ fun GamingRoute(
     val gameDnsPresets = remember {
         IranPresetsCatalog.dnsPresets.filter { it.badge == "Game" || it.id in setOf("cf_udp_1", "cf_pdoq", "quad9_unfiltered") }
     }
+    val selectedDnsPreset = gameDnsPresets.firstOrNull { it.address.substringBefore(':') == state.gaming.selectedDnsIp.substringBefore(':') }
+        ?: gameDnsPresets.firstOrNull()
+
+    val gamingMethodsHelp = remember(isFa) {
+        GamingMode.entries.joinToString("\n\n") { gm ->
+            "• ${if (isFa) gm.titleFa else gm.titleEn}\n${if (isFa) gm.subtitleFa else gm.subtitleEn}"
+        }
+    }
 
     ResponsiveScreenContainer { metrics ->
         LazyColumn(
@@ -128,9 +136,11 @@ fun GamingRoute(
                     Icon(Icons.Rounded.SportsEsports, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = tr("Gaming & Low Ping", "گیم و پینگ پایین"),
+                        text = tr("Gaming", "گیمینگ"),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     Surface(
@@ -145,7 +155,7 @@ fun GamingRoute(
                         ) {
                             Icon(Icons.AutoMirrored.Rounded.Send, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text(tr("Telegram", "تلگرام"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                            Text(tr("TG", "تلگرام"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, maxLines = 1)
                         }
                     }
                     IconButton(onClick = { showLogsSheet = true }, modifier = Modifier.size(36.dp)) {
@@ -178,18 +188,16 @@ fun GamingRoute(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            Text(
-                                text = if (state.gaming.mode == GamingMode.CUSTOM_SERVER) {
-                                    state.activeProfile?.let { "${it.name} (${it.address}:${it.port})" }
-                                        ?: tr("Pick a low-ping server in Servers tab", "یک سرور از تب سرورها انتخاب کنید")
-                                } else {
-                                    if (isFa) state.gaming.mode.subtitleFa else state.gaming.mode.subtitleEn
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            if (state.gaming.mode == GamingMode.CUSTOM_SERVER) {
+                                Text(
+                                    text = state.activeProfile?.let { "${it.name} (${it.address}:${it.port})" }
+                                        ?: tr("Pick a server in Servers tab", "یک سرور در تب سرورها انتخاب کنید"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                         Spacer(Modifier.width(12.dp))
                         PnifoxConnectButton(
@@ -228,55 +236,62 @@ fun GamingRoute(
                 )
             }
 
-            // Gaming Modes List
-            item {
-                PnifoxCard(contentPadding = metrics.cardPadding) {
-                    PnifoxSectionLabel(title = tr("Select Gaming Method", "انتخاب روش اتصال گیم"))
-                    Spacer(Modifier.height(8.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GamingMode.entries.forEach { gm ->
-                            val selected = state.gaming.mode == gm
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                border = BorderStroke(if (selected) 1.5.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    viewModel.updateGaming { it.copy(mode = gm) }
-                                    if (gm == GamingMode.CUSTOM_SERVER && state.activeProfile == null) {
-                                        onNavigateServers()
-                                    }
-                                },
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text(
-                                            text = if (isFa) gm.titleFa else gm.titleEn,
-                                            fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        if (selected) {
-                                            PnifoxBadgePill(
-                                                text = tr("Active", "فعال"),
-                                                containerColor = MaterialTheme.colorScheme.primary,
-                                                contentColor = MaterialTheme.colorScheme.onPrimary,
-                                            )
-                                        }
-                                    }
-                                    Text(if (isFa) gm.subtitleFa else gm.subtitleEn, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Anti-Sanction Gaming DNS + Zero-ICMP Ping
+            // Compact Gaming Method & DNS Selectors
             item {
                 PnifoxCard(contentPadding = metrics.cardPadding) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         PnifoxSectionLabel(
-                            title = tr("Gaming Anti-Sanction DNS", "DNS ضدتحریم گیمینگ"),
+                            title = tr("Gaming Method & DNS", "روش اتصال گیم و DNS"),
+                            modifier = Modifier.weight(1f),
+                        )
+                        PnifoxInfoPopupButton(
+                            title = tr("Gaming Methods", "توضیحات روش‌های گیمینگ"),
+                            body = gamingMethodsHelp,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    PnifoxDropdownField(
+                        label = tr("Method", "روش"),
+                        selectedText = if (isFa) state.gaming.mode.titleFa else state.gaming.mode.titleEn,
+                        options = GamingMode.entries,
+                        selectedItem = state.gaming.mode,
+                        optionLabel = { gm -> if (isFa) gm.titleFa else gm.titleEn },
+                        onSelect = { gm ->
+                            viewModel.updateGaming { it.copy(mode = gm) }
+                            if (gm == GamingMode.CUSTOM_SERVER && state.activeProfile == null) {
+                                onNavigateServers()
+                            }
+                        },
+                        icon = Icons.Rounded.SportsEsports,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PnifoxDropdownField(
+                            label = "DNS",
+                            selectedText = selectedDnsPreset?.let { preset ->
+                                val ip = preset.address.substringBefore(':')
+                                val ms = state.dnsPingMap[ip]
+                                val pStr = if (ms != null) " (${ms}ms)" else ""
+                                "${if (isFa) preset.titleFa else preset.titleEn}$pStr"
+                            } ?: state.gaming.selectedDnsIp,
+                            options = gameDnsPresets,
+                            selectedItem = selectedDnsPreset,
+                            optionLabel = { preset ->
+                                val ip = preset.address.substringBefore(':')
+                                val ms = state.dnsPingMap[ip]
+                                val pStr = if (ms != null) " • ${ms}ms" else ""
+                                "${if (isFa) preset.titleFa else preset.titleEn}$pStr"
+                            },
+                            onSelect = { preset ->
+                                val ip = preset.address.substringBefore(':')
+                                viewModel.updateGaming { it.copy(selectedDnsIp = ip) }
+                            },
+                            icon = Icons.Rounded.Dns,
                             modifier = Modifier.weight(1f),
                         )
                         OutlinedButton(
@@ -286,20 +301,7 @@ fun GamingRoute(
                         ) {
                             Icon(Icons.Rounded.Speed, null, modifier = Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text(if (state.isTestingDnsPing) "..." else tr("Ping DNS", "تست پینگ"), style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        gameDnsPresets.forEach { preset ->
-                            val ip = preset.address.substringBefore(':')
-                            val ms = state.dnsPingMap[ip]
-                            val suffix = if (ms != null) " • ${ms}ms" else ""
-                            FilterChip(
-                                selected = state.gaming.selectedDnsIp.substringBefore(':') == ip,
-                                onClick = { viewModel.updateGaming { it.copy(selectedDnsIp = ip) } },
-                                label = { Text("${if (isFa) preset.titleFa else preset.titleEn}$suffix", maxLines = 1) },
-                            )
+                            Text(if (state.isTestingDnsPing) "..." else tr("Ping", "پینگ"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
                     }
                 }
@@ -308,7 +310,7 @@ fun GamingRoute(
             // Tuning & Local Desync Fragment slider
             item {
                 PnifoxCard(contentPadding = metrics.cardPadding) {
-                    PnifoxSectionLabel(title = tr("Gaming & Anti-DPI Tuning", "تنظیمات گیم و ضدDPI محلی"))
+                    PnifoxSectionLabel(title = tr("Gaming Tuning", "تنظیمات گیمینگ"))
                     Spacer(Modifier.height(6.dp))
                     if (state.gaming.mode == GamingMode.LOCAL_DPI_DESYNC) {
                         Text(
@@ -324,32 +326,15 @@ fun GamingRoute(
                     }
                     PnifoxSwitchRow(
                         title = tr("Bypass Iranian Game Servers", "عبور مستقیم سرورهای گیم داخلی"),
-                        subtitle = tr("Keeps domestic downloads/lobbies directly on your ISP.", "ترافیک ایران مستقیما از اینترنت خودتان رد شود."),
                         checked = state.gaming.bypassIranGameTraffic,
                         onCheckedChange = { c -> viewModel.updateGaming { it.copy(bypassIranGameTraffic = c) } },
                     )
                     PnifoxSwitchRow(
-                        title = tr("Enable QUIC v2 on WARP Gaming", "استفاده از QUIC v2 در تانل گیم"),
-                        subtitle = tr("Reduces UDP jitter & packet-loss impact.", "کاهش نوسان پینگ روی شبکه موبایل و وای‌فای."),
+                        title = tr("QUIC v2 on WARP Gaming", "استفاده از QUIC v2 در تانل گیم"),
                         checked = state.gaming.preferQuicV2H3,
                         onCheckedChange = { c -> viewModel.updateGaming { it.copy(preferQuicV2H3 = c) } },
                     )
                 }
-            }
-
-            // Goal-Based Scenarios inside Gaming too
-            item {
-                ScenarioPresetsCard(
-                    selectedScenario = state.selectedScenario,
-                    isSmartConnecting = state.isSmartConnecting,
-                    smartConnectStatus = state.smartConnectStatus,
-                    cardPadding = metrics.cardPadding,
-                    onApplyScenario = { prof, connect ->
-                        viewModel.applyScenario(prof, connect, onNavigateSection)
-                    },
-                    onSmartAutoConnect = viewModel::smartAutoConnect,
-                    onOpenProtocolGuide = { showProtocolGuide = true },
-                )
             }
         }
     }
@@ -361,9 +346,5 @@ fun GamingRoute(
             onClear = viewModel::clearLogs,
             onDismiss = { showLogsSheet = false },
         )
-    }
-
-    if (showProtocolGuide) {
-        ProtocolGuideDialog(onDismiss = { showProtocolGuide = false })
     }
 }

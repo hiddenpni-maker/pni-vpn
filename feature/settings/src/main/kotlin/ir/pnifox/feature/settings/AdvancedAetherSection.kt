@@ -3,14 +3,23 @@ package ir.pnifox.feature.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.Radar
+import androidx.compose.material.icons.rounded.Router
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -30,6 +39,7 @@ import ir.pnifox.core.model.IpVersionMode
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.PsiphonCdnCatalog
 import ir.pnifox.core.model.PsiphonChainMode
+import ir.pnifox.core.ui.PnifoxDropdownField
 import ir.pnifox.core.ui.PnifoxSwitchRow
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -55,13 +65,13 @@ fun AdvancedAetherSection(
                 enabled = !isFetchingKeys,
                 modifier = Modifier.weight(1f),
             ) {
-                Text(if (isFetchingKeys) "Registering..." else "API Key Fallback")
+                Text(if (isFetchingKeys) "Registering..." else "API Key Fallback", maxLines = 1)
             }
             OutlinedButton(
                 onClick = { onFetchWarpKeys("MASQUE") },
                 enabled = !isFetchingKeys,
             ) {
-                Text("MASQUE")
+                Text("MASQUE", maxLines = 1)
             }
         }
         OutlinedTextField(
@@ -84,33 +94,38 @@ fun AdvancedAetherSection(
 
         HorizontalDivider()
         Text("Protocol & Obfuscation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AetherProtocol.entries.forEach { proto ->
-                FilterChip(
-                    selected = aether.protocol == proto,
-                    onClick = { onUpdateAether { it.copy(protocol = proto) } },
-                    label = { Text(proto.label) },
-                )
-            }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PnifoxDropdownField(
+                label = "Protocol",
+                selectedText = aether.protocol.label,
+                options = AetherProtocol.entries,
+                selectedItem = aether.protocol,
+                optionLabel = { it.label },
+                onSelect = { proto -> onUpdateAether { it.copy(protocol = proto) } },
+                icon = Icons.Rounded.Router,
+                modifier = Modifier.weight(1f),
+            )
+            PnifoxDropdownField(
+                label = "Transport",
+                selectedText = aether.masqueTransport.label,
+                options = MasqueTransport.entries,
+                selectedItem = aether.masqueTransport,
+                optionLabel = { it.label },
+                onSelect = { tr -> onUpdateAether { it.copy(masqueTransport = tr) } },
+                icon = Icons.Rounded.SwapHoriz,
+                modifier = Modifier.weight(0.9f),
+            )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MasqueTransport.entries.forEach { tr ->
-                FilterChip(
-                    selected = aether.masqueTransport == tr,
-                    onClick = { onUpdateAether { it.copy(masqueTransport = tr) } },
-                    label = { Text(tr.label) },
-                )
-            }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AetherNoizeProfile.entries.forEach { nz ->
-                FilterChip(
-                    selected = aether.noizeProfile == nz,
-                    onClick = { onUpdateAether { it.copy(noizeProfile = nz) } },
-                    label = { Text("--noize ${nz.label}") },
-                )
-            }
-        }
+        PnifoxDropdownField(
+            label = "Noize",
+            selectedText = aether.noizeProfile.label,
+            options = AetherNoizeProfile.entries,
+            selectedItem = aether.noizeProfile,
+            optionLabel = { it.label },
+            onSelect = { nz -> onUpdateAether { it.copy(noizeProfile = nz) } },
+            icon = Icons.Rounded.Shield,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         HorizontalDivider()
         Text("Fragment & ECH", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -119,43 +134,46 @@ fun AdvancedAetherSection(
             checked = aether.fragmentEnabled,
             onCheckedChange = { c -> onUpdateAether { it.copy(fragmentEnabled = c) } },
         )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = aether.fragmentSizeBytes,
-                onValueChange = { v -> onUpdateAether { it.copy(fragmentSizeBytes = v) } },
-                label = { Text("Size (8-16)") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = aether.fragmentDelayMs,
-                onValueChange = { v -> onUpdateAether { it.copy(fragmentDelayMs = v) } },
-                label = { Text("Delay ms (2-10)") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
+        if (aether.fragmentEnabled) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = aether.fragmentSizeBytes,
+                    onValueChange = { v -> onUpdateAether { it.copy(fragmentSizeBytes = v) } },
+                    label = { Text("Size (8-16)") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = aether.fragmentDelayMs,
+                    onValueChange = { v -> onUpdateAether { it.copy(fragmentDelayMs = v) } },
+                    label = { Text("Delay ms (2-10)") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         PnifoxSwitchRow(
-            title = "Encrypted Client Hello (--ech auto)",
-            subtitle = "Off by default (experimental — leave OFF if handshakes fail).",
+            title = "ECH (Default Off)",
             checked = aether.echEnabled,
             onCheckedChange = { c -> onUpdateAether { it.copy(echEnabled = c) } },
         )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = aether.echDns,
-                onValueChange = { v -> onUpdateAether { it.copy(echDns = v) } },
-                label = { Text("ECH DNS") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = aether.echDomain,
-                onValueChange = { v -> onUpdateAether { it.copy(echDomain = v) } },
-                label = { Text("ECH domain") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
+        if (aether.echEnabled) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = aether.echDns,
+                    onValueChange = { v -> onUpdateAether { it.copy(echDns = v) } },
+                    label = { Text("ECH DNS") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = aether.echDomain,
+                    onValueChange = { v -> onUpdateAether { it.copy(echDomain = v) } },
+                    label = { Text("ECH domain") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
 
         HorizontalDivider()
@@ -165,36 +183,39 @@ fun AdvancedAetherSection(
             checked = aether.scanForEndpoint,
             onCheckedChange = { c -> onUpdateAether { it.copy(scanForEndpoint = c) } },
         )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AetherScanMode.entries.forEach { sm ->
-                FilterChip(
-                    selected = aether.scanMode == sm,
-                    onClick = { onUpdateAether { it.copy(scanMode = sm) } },
-                    label = { Text(sm.label) },
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IpVersionMode.entries.forEach { ipVer ->
-                FilterChip(
-                    selected = aether.ipVersion == ipVer,
-                    onClick = { onUpdateAether { it.copy(ipVersion = ipVer) } },
-                    label = { Text(ipVer.label) },
-                )
-            }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PnifoxDropdownField(
+                label = "Scan",
+                selectedText = aether.scanMode.label,
+                options = AetherScanMode.entries,
+                selectedItem = aether.scanMode,
+                optionLabel = { it.label },
+                onSelect = { sm -> onUpdateAether { it.copy(scanMode = sm) } },
+                icon = Icons.Rounded.Radar,
+                modifier = Modifier.weight(1f),
+            )
+            PnifoxDropdownField(
+                label = "IP",
+                selectedText = aether.ipVersion.label,
+                options = IpVersionMode.entries,
+                selectedItem = aether.ipVersion,
+                optionLabel = { it.label },
+                onSelect = { iv -> onUpdateAether { it.copy(ipVersion = iv) } },
+                modifier = Modifier.weight(0.85f),
+            )
         }
 
         HorizontalDivider()
         Text("Exit-Node, Psiphon & Tor", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ExitDialMode.entries.forEach { dial ->
-                FilterChip(
-                    selected = aether.exitDialMode == dial,
-                    onClick = { onUpdateAether { it.copy(exitDialMode = dial) } },
-                    label = { Text("dialMode: ${dial.label}") },
-                )
-            }
-        }
+        PnifoxDropdownField(
+            label = "dialMode",
+            selectedText = aether.exitDialMode.label,
+            options = ExitDialMode.entries,
+            selectedItem = aether.exitDialMode,
+            optionLabel = { it.label },
+            onSelect = { dial -> onUpdateAether { it.copy(exitDialMode = dial) } },
+            modifier = Modifier.fillMaxWidth(),
+        )
         OutlinedTextField(
             value = aether.finalMaskRawJson,
             onValueChange = { v -> onUpdateAether { it.copy(finalMaskRawJson = v) } },
@@ -208,33 +229,40 @@ fun AdvancedAetherSection(
             checked = aether.psiphonEnabled,
             onCheckedChange = { c -> onUpdateAether { it.copy(psiphonEnabled = c) } },
         )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PsiphonChainMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = aether.psiphonMode == mode,
-                    onClick = { onUpdateAether { it.copy(psiphonMode = mode) } },
-                    label = { Text(mode.labelEn) },
-                )
-            }
-        }
-        val activeSets = aether.psiphonCdnSets.split(',', ';', '\n', ' ').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PsiphonCdnCatalog.availableCdnSets.forEach { (id, label) ->
-                val selected = id in activeSets
-                FilterChip(
-                    selected = selected,
-                    onClick = {
-                        val next = if (selected) activeSets - id else activeSets + id
-                        onUpdateAether { it.copy(psiphonCdnSets = next.joinToString(",")) }
-                    },
-                    label = { Text(label) },
-                )
-            }
+        val setOptions = listOf("" to "All Sets (Auto)") + PsiphonCdnCatalog.availableCdnSets
+        val activeSet = setOptions.firstOrNull { it.first.equals(aether.psiphonCdnSets.trim(), ignoreCase = true) } ?: setOptions.first()
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PnifoxDropdownField(
+                label = "Mode",
+                selectedText = aether.psiphonMode.labelEn,
+                options = PsiphonChainMode.entries,
+                selectedItem = aether.psiphonMode,
+                optionLabel = { it.labelEn },
+                onSelect = { mode -> onUpdateAether { it.copy(psiphonMode = mode) } },
+                modifier = Modifier.weight(1f),
+            )
+            PnifoxDropdownField(
+                label = "CDN Set",
+                selectedText = activeSet.second,
+                options = setOptions,
+                selectedItem = activeSet,
+                optionLabel = { it.second },
+                onSelect = { pair -> onUpdateAether { it.copy(psiphonCdnSets = pair.first) } },
+                icon = Icons.Rounded.Cloud,
+                modifier = Modifier.weight(1f),
+            )
         }
         OutlinedTextField(
             value = aether.psiphonCdnFrontingIps,
             onValueChange = { v -> onUpdateAether { it.copy(psiphonCdnFrontingIps = v) } },
             label = { Text("CDN Edge IPs / CIDRs (Akamai, Cloudflare)") },
+            trailingIcon = if (aether.psiphonCdnFrontingIps.isNotBlank()) {
+                {
+                    IconButton(onClick = { onUpdateAether { it.copy(psiphonCdnFrontingIps = "") } }) {
+                        Icon(Icons.Rounded.Clear, contentDescription = "Clear CDN IPs", modifier = Modifier.size(16.dp))
+                    }
+                }
+            } else null,
             minLines = 2,
             maxLines = 4,
             modifier = Modifier.fillMaxWidth(),
@@ -253,11 +281,11 @@ fun AdvancedAetherSection(
             onCheckedChange = { c -> onUpdateAether { it.copy(psiphonUseBundledServersDat = c) } },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onClearPsiphonData) { Text("Clear Psiphon Data") }
+            OutlinedButton(onClick = onClearPsiphonData) { Text("Clear Psiphon Data", maxLines = 1) }
             FilterChip(
                 selected = aether.torEnabled,
                 onClick = { onUpdateAether { it.copy(torEnabled = !it.torEnabled) } },
-                label = { Text("Tor Exit") },
+                label = { Text("Tor Exit", maxLines = 1) },
             )
         }
 

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
@@ -61,6 +62,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ir.pnifox.core.model.AccentColorPref
 import ir.pnifox.core.model.ActiveSectionEngine
@@ -80,6 +82,7 @@ import ir.pnifox.desktop.model.WindowsTunnelMode
 import ir.pnifox.desktop.ui.DesktopBadgePill
 import ir.pnifox.desktop.ui.DesktopCard
 import ir.pnifox.desktop.ui.DesktopConnectButton
+import ir.pnifox.desktop.ui.DesktopDropdownButton
 import ir.pnifox.desktop.ui.DesktopFoxMascot
 import ir.pnifox.desktop.ui.DesktopStateHolder
 import ir.pnifox.desktop.ui.DesktopSwitchRow
@@ -686,28 +689,41 @@ fun ScannerDesktopTab(
         "akamai" to "akamai_v4.txt",
     )
 
+    val aether = state.persisted.aetherSettings
+    val hasAppliedIp = aether.endpointIp.isNotBlank() || aether.psiphonCdnFrontingIps.isNotBlank()
+
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             DesktopCard {
-                Text(dtr("Multi-CDN Clean IP Scanner (Windows)", "اسکنر آی‌پی تمیز (کلودفلر / وارپ)"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(dtr("Multi-CDN Clean IP Scanner", "اسکنر آی‌پی تمیز (وارپ / کلودفلر / اکامای)"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    providers.forEach { pair ->
-                        FilterChip(
-                            selected = provider.first == pair.first,
-                            onClick = { provider = pair },
-                            label = { Text(pair.first.uppercase()) },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ScanStyle.entries.forEach { style ->
-                        FilterChip(
-                            selected = scanStyle == style,
-                            onClick = { scanStyle = style },
-                            label = { Text(if (isFa) style.labelFa else style.labelEn) },
-                        )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DesktopDropdownButton(
+                        label = "CDN",
+                        selectedText = provider.first.uppercase(),
+                        options = providers,
+                        selectedItem = provider,
+                        optionLabel = { it.first.uppercase() },
+                        onSelect = { provider = it },
+                        icon = Icons.Rounded.Radar,
+                    )
+                    DesktopDropdownButton(
+                        label = dtr("Style", "سبک اسکن"),
+                        selectedText = if (isFa) scanStyle.labelFa else scanStyle.labelEn,
+                        options = ScanStyle.entries,
+                        selectedItem = scanStyle,
+                        optionLabel = { if (isFa) it.labelFa else it.labelEn },
+                        onSelect = { scanStyle = it },
+                    )
+                    if (hasAppliedIp) {
+                        OutlinedButton(
+                            onClick = { holder.clearAllAppliedIps() },
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Icon(Icons.Rounded.Close, null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(dtr("Clear Applied IPs", "پاک کردن IPهای اعمال‌شده"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -718,30 +734,30 @@ fun ScannerDesktopTab(
                 Spacer(Modifier.height(6.dp))
                 Text(dtr("Diverse Sample IPs: ${countFloat.toInt()}", "تعداد تست متنوع: ${countFloat.toInt()}"), style = MaterialTheme.typography.labelMedium)
                 Slider(value = countFloat, onValueChange = { countFloat = it }, valueRange = 20f..250f)
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!state.isScanning) {
                         Button(onClick = { holder.startScan(provider.first, provider.second, customTargets, sni, countFloat.toInt(), scanStyle) }) {
                             Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(dtr("Start Scan", "شروع اسکن"))
+                            Spacer(Modifier.width(5.dp))
+                            Text(dtr("Start Scan", "شروع اسکن"), maxLines = 1)
                         }
                     } else {
                         Button(onClick = { holder.stopScan() }) {
                             Icon(Icons.Rounded.Stop, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(dtr("Stop", "توقف"))
+                            Spacer(Modifier.width(5.dp))
+                            Text(dtr("Stop", "توقف"), maxLines = 1)
                         }
                     }
                     if (state.scanProgressText.isNotBlank()) {
                         Text(state.scanProgressText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     }
-                    val topHealthy = state.scanResults.filter { it.lossPct <= 35.0 }.take(25).map { it.ip }
-                    if (topHealthy.isNotEmpty()) {
+                    val healthyIps = state.scanResults.filter { it.lossPct <= 35.0 }.take(25).map { it.ip }
+                    if (healthyIps.isNotEmpty()) {
                         OutlinedButton(
-                            onClick = { holder.applyScannedIpsToPsiphonCdn(topHealthy, provider.first) },
+                            onClick = { holder.applyScannedIpsToPsiphonCdn(healthyIps, provider.first) },
                             shape = RoundedCornerShape(8.dp),
                         ) {
-                            Text(dtr("Apply Top ${topHealthy.size} to Akamai CDN", "اعمال ${topHealthy.size} IP به فرانتینگ اکامای"))
+                            Text(dtr("Apply Top ${healthyIps.size} to Akamai", "اعمال ${healthyIps.size} IP به اکامای"), maxLines = 1)
                         }
                     }
                 }
@@ -757,15 +773,15 @@ fun ScannerDesktopTab(
                         contentColor = if (res.grade in listOf("S+", "A")) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.width(10.dp))
-                    Text("${res.ip}:${res.port}", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    Text("${res.latencyMs}ms • Loss ${res.lossPct.toInt()}% • Jitter ${res.jitterMs}ms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(10.dp))
+                    Text("${res.ip}:${res.port}", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${res.latencyMs}ms • Loss ${res.lossPct.toInt()}% • Jitter ${res.jitterMs}ms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = { holder.applyScannedIp(res.ip, res.port) }, shape = RoundedCornerShape(8.dp)) {
-                        Text(dtr("Apply IP", "اعمال IP"))
+                        Text(dtr("Apply IP", "اعمال IP"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
                     Spacer(Modifier.width(6.dp))
                     OutlinedButton(onClick = { holder.applyScannedIpsToPsiphonCdn(listOf(res.ip), provider.first) }, shape = RoundedCornerShape(8.dp)) {
-                        Text(dtr("Akamai CDN", "اکامای CDN"))
+                        Text(dtr("Akamai", "اکامای"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
                 }
             }

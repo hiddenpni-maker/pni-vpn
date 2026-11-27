@@ -298,5 +298,37 @@ class AetherArgBuilderTest {
         assertTrue(reverseArgs.contains("--psiphon-reverse"))
         assertTrue(reverseArgs.contains("--masque"))
         assertTrue(reverseArgs.contains("--h2"))
+
+        // Akamai standalone CDN must never fail due to incompatible WARP exit countries like CA
+        val akamaiWithCaRegion = builder.buildRunArgs(
+            appSettings = AppSettings(activePreset = OneTapPreset.PSIPHON_AKAMAI_CDN, exitNode = ExitNode.PSIPHON),
+            aether = AetherSettings(
+                psiphonEnabled = true,
+                psiphonMode = ir.pnifox.core.model.PsiphonChainMode.STANDALONE_CDN,
+                psiphonExitCountry = "CA",
+            ),
+            nativeDir = "/data/app/lib/arm64",
+            workDir = File("/data/local/aether"),
+        )
+        assertTrue(akamaiWithCaRegion.contains("--psiphon-only"))
+        assertTrue(!akamaiWithCaRegion.contains("--psiphon-region"))
+
+        // Separating Protocol + Transport + Psiphon chain must respect protocol/transport choices cleanly
+        val chainedArgs = builder.buildRunArgs(
+            appSettings = AppSettings(activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.PSIPHON),
+            aether = AetherSettings(
+                protocol = AetherProtocol.WIREGUARD_OVER_MASQUE,
+                masqueTransport = MasqueTransport.HTTP3,
+                psiphonEnabled = true,
+                psiphonMode = ir.pnifox.core.model.PsiphonChainMode.WARP_TO_PSIPHON,
+                psiphonExitCountry = "DE",
+            ),
+            nativeDir = "/data/app/lib/arm64",
+            workDir = File("/data/local/aether"),
+        )
+        assertTrue(chainedArgs.contains("--gool"))
+        assertTrue(chainedArgs.contains("--h3"))
+        assertTrue(chainedArgs.contains("--psiphon"))
+        assertEquals("DE", chainedArgs[chainedArgs.indexOf("--psiphon-region") + 1])
     }
 }

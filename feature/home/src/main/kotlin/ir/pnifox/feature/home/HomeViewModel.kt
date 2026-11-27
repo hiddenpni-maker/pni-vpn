@@ -32,16 +32,12 @@ import ir.pnifox.core.vpn.LogEntry
 import ir.pnifox.core.vpn.LogLevel
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.NativeProcessManager
-import ir.pnifox.core.vpn.SmartConnectOrchestrator
-import ir.pnifox.core.vpn.StrategyArm
 import ir.pnifox.core.vpn.VpnController
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -58,8 +54,6 @@ data class HomeUiState(
     val isRegisteringKeys: Boolean = false,
     val isTestingPing: Boolean = false,
     val isFetchingEch: Boolean = false,
-    val isSmartConnecting: Boolean = false,
-    val smartConnectStatus: String? = null,
     val selectedScenario: ScenarioGoalId? = null,
     val keyActionMessage: String? = null,
     val rxSpeedBps: Long = 0L,
@@ -74,8 +68,6 @@ private data class AetherRuntimeTuple(
     val isRegisteringKeys: Boolean = false,
     val isTestingPing: Boolean = false,
     val isFetchingEch: Boolean = false,
-    val isSmartConnecting: Boolean = false,
-    val smartConnectStatus: String? = null,
     val keyActionMessage: String? = null,
     val identities: AetherIdentityFilesState = AetherIdentityFilesState(false, false, false),
 )
@@ -141,8 +133,6 @@ class HomeViewModel @Inject constructor(
             isRegisteringKeys = rt.isRegisteringKeys,
             isTestingPing = rt.isTestingPing,
             isFetchingEch = rt.isFetchingEch,
-            isSmartConnecting = rt.isSmartConnecting,
-            smartConnectStatus = rt.smartConnectStatus,
             selectedScenario = scenario,
             keyActionMessage = rt.keyActionMessage,
             rxSpeedBps = traffic.rxSpeedBps,
@@ -261,6 +251,21 @@ class HomeViewModel @Inject constructor(
             }
             vpnController.startConnection(ActiveSectionEngine.AETHER)
         }
+    }
+
+    fun clearAppliedEndpointIp() {
+        updateAether { it.copy(endpointIp = "", scanForEndpoint = true) }
+        aetherRuntime.value = aetherRuntime.value.copy(keyActionMessage = "Cleared saved endpoint IP.")
+    }
+
+    fun clearAppliedCdnIps() {
+        updateAether { it.copy(psiphonCdnFrontingIps = "") }
+        aetherRuntime.value = aetherRuntime.value.copy(keyActionMessage = "Cleared saved Akamai / CDN IPs.")
+    }
+
+    fun clearAllAppliedIps() {
+        updateAether { it.copy(endpointIp = "", scanForEndpoint = true, psiphonCdnFrontingIps = "") }
+        aetherRuntime.value = aetherRuntime.value.copy(keyActionMessage = "Cleared all applied IPs.")
     }
 
     fun selectRegion(countryCode: String) {
@@ -499,81 +504,6 @@ class HomeViewModel @Inject constructor(
                 )
             }
         }
-    }
-
-    fun smartAutoConnect() {
-        if (aetherRuntime.value.isSmartConnecting) return
-        viewModelScope.launch {
-            aetherRuntime.value = aetherRuntime.value.copy(
-                isSmartConnecting = true,
-                smartConnectStatus = "Evaluating ranked routes...",
-            )
-            val banditJson = preferencesRepo.banditScoresFlow.first()
-            val arms = SmartConnectOrchestrator.rankedArms(uiState.value.selectedScenario, banditJson).take(3)
-            var currentJson = banditJson
-            for ((idx, arm) in arms.withIndex()) {
-                aetherRuntime.value = aetherRuntime.value.copy(
-                    smartConnectStatus = "Trying ${arm.titleEn} (${idx + 1}/${arms.size})...",
-                )
-                val section = applyStrategyArm(arm)
-                val t0 = System.currentTimeMillis()
-                vpnController.startConnection(section)
-                // Give asynchronous coroutine a brief moment to enter Connecting/Connected state before polling
-                delay(400L)
-                val deadline = System.currentTimeMillis() + 60_000L
-                while (System.currentTimeMillis() < deadline && vpnController.tunnelState.value is TunnelState.Connecting) {
-                    delay(350L)
-                }
-                val st = vpnController.tunnelState.value
-                val elapsed = (System.currentTimeMillis() - t0).coerceAtLeast(50L)
-                val ok = st is TunnelState.Connected && (vpnController.refreshActiveRealDelay() != null || arm == StrategyArm.GAMING_DNS)
-                currentJson = SmartConnectOrchestrator.recordOutcome(currentJson, arm, ok, elapsed)
-                preferencesRepo.saveBanditScores(currentJson)
-                if (ok) {
-                    aetherRuntime.value = aetherRuntime.value.copy(
-                        isSmartConnecting = false,
-                        smartConnectStatus = "Connected via ${arm.titleEn} ✓",
-                    )
-                    return@launch
-                }
-            }
-            aetherRuntime.value = aetherRuntime.value.copy(
-                isSmartConnecting = false,
-                smartConnectStatus = "Tested top strategies; check Logs or pick a Scenario.",
-            )
-        }
-    }
-
-    private suspend fun applyStrategyArm(arm: StrategyArm): ActiveSectionEngine = when (arm) {
-        StrategyArm.AETHER_MASQUE_H2 -> {
-            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.DEFAULT) }
-            preferencesRepo.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP2, psiphonEnabled = false, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.AETHER_MASQUE_H3 -> {
-            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.MASQUE_IN_MASQUE, exitNode = ExitNode.DEFAULT) }
-            preferencesRepo.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP3, quicV2Enabled = true, psiphonEnabled = false, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.AETHER_WG_NOIZE -> {
-            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.WG_OVER_MASQUE, exitNode = ExitNode.DEFAULT) }
-            preferencesRepo.updateAetherSettings { it.copy(protocol = AetherProtocol.WIREGUARD_OVER_MASQUE, psiphonEnabled = false, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.AETHER_PSIPHON -> {
-            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.WARP_TO_PSIPHON, exitNode = ExitNode.PSIPHON) }
-            preferencesRepo.updateAetherSettings { it.copy(psiphonEnabled = true, torEnabled = false) }
-            ActiveSectionEngine.AETHER
-        }
-        StrategyArm.LOCAL_DPI_DESYNC -> {
-            preferencesRepo.updateGamingSettings { it.copy(mode = GamingMode.LOCAL_DPI_DESYNC) }
-            ActiveSectionEngine.GAMING
-        }
-        StrategyArm.GAMING_DNS -> {
-            preferencesRepo.updateGamingSettings { it.copy(mode = GamingMode.DNS_ANTI_SANCTION) }
-            ActiveSectionEngine.GAMING
-        }
-        StrategyArm.MHR_RELAY -> ActiveSectionEngine.MHR
     }
 
     fun dismissBanner() {

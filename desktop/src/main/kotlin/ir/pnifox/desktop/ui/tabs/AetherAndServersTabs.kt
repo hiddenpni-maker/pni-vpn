@@ -20,14 +20,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,9 +62,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ir.pnifox.core.model.ActiveSectionEngine
 import ir.pnifox.core.model.AetherIdentityTarget
+import ir.pnifox.core.model.AetherNoizeProfile
+import ir.pnifox.core.model.AetherProtocol
 import ir.pnifox.core.model.AetherScanMode
 import ir.pnifox.core.model.AppLanguage
 import ir.pnifox.core.model.ExitNode
+import ir.pnifox.core.model.IpVersionMode
+import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.PnifoxRegionsCatalog
 import ir.pnifox.core.model.ProxyProfile
@@ -69,12 +81,24 @@ import ir.pnifox.desktop.model.WindowsTunnelMode
 import ir.pnifox.desktop.ui.DesktopBadgePill
 import ir.pnifox.desktop.ui.DesktopCard
 import ir.pnifox.desktop.ui.DesktopConnectButton
+import ir.pnifox.desktop.ui.DesktopDropdownButton
 import ir.pnifox.desktop.ui.DesktopFoxMascot
+import ir.pnifox.desktop.ui.DesktopInfoPopupButton
 import ir.pnifox.desktop.ui.DesktopStateHolder
 import ir.pnifox.desktop.ui.DesktopSwitchRow
 import ir.pnifox.desktop.ui.DesktopUiState
 import ir.pnifox.desktop.ui.LocalDesktopLanguage
 import ir.pnifox.desktop.ui.dtr
+
+private enum class DesktopExitChainOption(
+    val labelEn: String,
+    val labelFa: String,
+) {
+    DIRECT_WARP("WARP Direct (Fast)", "مستقیم WARP (سریع)"),
+    CHAIN_PSIPHON("+ Psiphon Exit", "+ زنجیره سایفون"),
+    REVERSE_PSIPHON("Psiphon -> WARP", "سایفون به WARP"),
+    CHAIN_TOR("+ Tor Exit", "+ زنجیره Tor"),
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -88,10 +112,23 @@ fun AetherDesktopTab(
     val isConnected = state.tunnelState is TunnelState.Connected && state.tunnelState.section == ActiveSectionEngine.AETHER
     val isConnecting = state.tunnelState is TunnelState.Connecting && state.tunnelState.section == ActiveSectionEngine.AETHER
 
+    val isAkamaiStandalone = aether.psiphonEnabled &&
+        (aether.psiphonMode == PsiphonChainMode.STANDALONE_CDN || app.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN)
+
+    val activeChain = when {
+        aether.torEnabled || app.exitNode == ExitNode.TOR -> DesktopExitChainOption.CHAIN_TOR
+        aether.psiphonEnabled && aether.psiphonMode == PsiphonChainMode.PSIPHON_TO_WARP -> DesktopExitChainOption.REVERSE_PSIPHON
+        aether.psiphonEnabled -> DesktopExitChainOption.CHAIN_PSIPHON
+        else -> DesktopExitChainOption.DIRECT_WARP
+    }
+    val activeRegion = PnifoxRegionsCatalog.findByCode(aether.psiphonExitCountry)
+    val hasAppliedIp = aether.endpointIp.isNotBlank() || aether.psiphonCdnFrontingIps.isNotBlank()
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // 1. Hero Card
         item {
             val showTunHint = state.persisted.windowsTunnelMode == WindowsTunnelMode.SYSTEM_PROXY && !state.persisted.tunPromptDismissed
             DesktopCard {
@@ -106,13 +143,23 @@ fun AetherDesktopTab(
                             onEnableTunMode = { holder.enableTunAndReconnect(ActiveSectionEngine.AETHER) },
                             onDismissTunSuggestion = { holder.dismissTunSuggestion() },
                         )
-                        Spacer(Modifier.height(10.dp))
-                        val endpointText = if (aether.scanForEndpoint || aether.endpointIp.isBlank()) {
-                            dtr("Diverse auto-scan across WARP subnets (${aether.scanMode.cliValue})", "اسکن متنوع روی رنج‌های WARP در زمان اتصال (${aether.scanMode.cliValue})")
+                        Spacer(Modifier.height(8.dp))
+                        val routeSummary = if (isAkamaiStandalone) {
+                            val customCnt = aether.psiphonCdnFrontingIps.split(',', ';', '\n', ' ').count { it.isNotBlank() }
+                            if (customCnt > 0) dtr("Akamai CDN • $customCnt custom edge IP(s)", "اکامای CDN • $customCnt آی‌پی دستی/اسکن‌شده")
+                            else dtr("Akamai CDN • Auto edge selection", "اکامای CDN • انتخاب خودکار سرور")
+                        } else if (aether.scanForEndpoint || aether.endpointIp.isBlank()) {
+                            dtr("${aether.protocol.label} (${aether.masqueTransport.label}) • Auto-Scan", "${aether.protocol.label} • اسکن خودکار اندپوینت")
                         } else {
-                            dtr("Pinned Endpoint: ${aether.endpointIp}:${aether.endpointPort} (Instant Connect)", "اندپوینت پین‌شده: ${aether.endpointIp}:${aether.endpointPort} (اتصال سریع)")
+                            dtr("Applied IP: ${aether.endpointIp}:${aether.endpointPort}", "آی‌پی اعمال‌شده: ${aether.endpointIp}:${aether.endpointPort}")
                         }
-                        Text(endpointText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            text = routeSummary,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     Spacer(Modifier.width(16.dp))
                     DesktopConnectButton(
@@ -122,148 +169,149 @@ fun AetherDesktopTab(
                     )
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { holder.registerAetherKeys(AetherIdentityTarget.ALL) },
-                        enabled = !state.isRegisteringWarp,
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        if (state.isRegisteringWarp) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Rounded.Key, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(dtr("Generate WARP Keys", "ساخت کلید WARP"))
+                    if (!isAkamaiStandalone) {
+                        Button(
+                            onClick = { holder.registerAetherKeys(AetherIdentityTarget.ALL) },
+                            enabled = !state.isRegisteringWarp,
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            if (state.isRegisteringWarp) CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Rounded.Key, null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(dtr("Generate WARP Keys", "ساخت کلید WARP"), maxLines = 1)
+                        }
+                        val rescanBannerMsg = dtr("Scanning WARP subnets...", "در حال اسکن رنج‌های WARP...")
+                        OutlinedButton(
+                            onClick = {
+                                holder.updateAether { it.copy(endpointIp = "", scanForEndpoint = true, scanMode = AetherScanMode.TURBO) }
+                                holder.setBanner(rescanBannerMsg)
+                                holder.toggleConnect(ActiveSectionEngine.AETHER)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Icon(Icons.Rounded.Search, null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(dtr("Re-scan IP", "اسکن مجدد"), maxLines = 1)
+                        }
                     }
-                    val rescanBannerMsg = dtr("Cleared pinned IP — scanning diverse WARP subnets now (Turbo)...", "آی‌پی قبلی پاک شد — اسکن متنوع رنج‌های WARP...")
-                    OutlinedButton(
-                        onClick = {
-                            holder.updateAether {
-                                it.copy(
-                                    endpointIp = "",
-                                    scanForEndpoint = true,
-                                    scanMode = AetherScanMode.TURBO,
-                                )
-                            }
-                            holder.setBanner(rescanBannerMsg)
-                            holder.toggleConnect(ActiveSectionEngine.AETHER)
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        Icon(Icons.Rounded.Search, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(dtr("Re-scan Endpoint", "اسکن مجدد اندپوینت"))
+                    if (hasAppliedIp) {
+                        OutlinedButton(
+                            onClick = { holder.clearAllAppliedIps() },
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Icon(Icons.Rounded.Clear, null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(dtr("Clear Applied IPs", "پاک کردن IPها"), maxLines = 1)
+                        }
                     }
                     OutlinedButton(
                         onClick = { holder.clearAetherCache() },
                         shape = RoundedCornerShape(10.dp),
                     ) {
-                        Icon(Icons.Rounded.DeleteOutline, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(dtr("Reset Psiphon / Tor Cache", "پاکسازی کش سایفون / تور"))
+                        Icon(Icons.Rounded.DeleteOutline, null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text(dtr("Clear Cache", "پاکسازی کش"), maxLines = 1)
                     }
                 }
             }
         }
 
+        // 2. Compact Use Case Selector + Info Popup
         item {
             ScenarioPresetsDesktopCard(state = state, holder = holder)
         }
 
+        // 3. Cleanly Separated Connection Engine Card (WARP/AETHER vs Akamai Standalone)
         item {
             DesktopCard {
-                Text(dtr("One-Tap Modes (Choose by Goal)", "حالت‌های سریع اتصال"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OneTapPreset.entries.forEach { preset ->
-                        val label = if (isFa) preset.titleFa else preset.titleEn
-                        FilterChip(
-                            selected = app.activePreset == preset,
-                            onClick = {
-                                val nextExit = when (preset) {
-                                    OneTapPreset.WARP_TO_PSIPHON, OneTapPreset.PSIPHON_AKAMAI_CDN -> ExitNode.PSIPHON
-                                    OneTapPreset.WARP_TO_TOR -> ExitNode.TOR
-                                    else -> ExitNode.DEFAULT
-                                }
-                                holder.updateApp { it.copy(activePreset = preset, exitNode = nextExit) }
-                                holder.updateAether { cur ->
-                                    cur.copy(
-                                        psiphonEnabled = nextExit == ExitNode.PSIPHON,
-                                        psiphonMode = if (preset == OneTapPreset.PSIPHON_AKAMAI_CDN) {
-                                            PsiphonChainMode.STANDALONE_CDN
-                                        } else {
-                                            cur.psiphonMode
-                                        },
-                                        psiphonCdnSets = if (preset == OneTapPreset.PSIPHON_AKAMAI_CDN && cur.psiphonCdnSets.isBlank()) {
-                                            "psiphon-akamai"
-                                        } else {
-                                            cur.psiphonCdnSets
-                                        },
-                                        torEnabled = nextExit == ExitNode.TOR,
-                                    )
-                                }
-                            },
-                            label = { Text(label) },
-                        )
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        dtr("Connection Core", "نوع هسته و تنظیمات"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    DesktopInfoPopupButton(
+                        title = dtr("AETHER & Akamai Guide", "توضیحات پروتکل‌ها و Akamai"),
+                        body = dtr(
+                            "• AETHER (WARP): Pick Protocol (MASQUE/WireGuard) + Transport (HTTP/2 or HTTP/3) independently, then optionally chain Psiphon & exit country on top.\n• Akamai / Psiphon CDN: Runs standalone without WARP keys or country lock so reachable Akamai CDN nodes connect cleanly.",
+                            "• حالت AETHER (WARP): پروتکل (MASQUE یا WireGuard) و نوع انتقال (HTTP/2 یا HTTP/3) را جداگانه انتخاب کنید و در صورت نیاز سایفون و کشور خروجی را روی آن فعال کنید.\n• حالت Akamai CDN (مستقل): بدون نیاز به WARP و بدون قفل کشور، مستقیم از طریق CDNهای اکامای متصل می‌شود.",
+                        ),
+                    )
                 }
-            }
-        }
-
-        item {
-            DesktopCard {
-                Text(dtr("Exit Region (For Anti-Sanction / Psiphon)", "ریجن خروجی (برای رفع تحریم / سایفون)"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PnifoxRegionsCatalog.regions.take(18).forEach { reg ->
-                        FilterChip(
-                            selected = aether.psiphonExitCountry.equals(reg.code, ignoreCase = true),
-                            onClick = {
-                                holder.updateApp { it.copy(regionCode = reg.code) }
-                                holder.updateAether { it.copy(psiphonExitCountry = reg.code) }
-                            },
-                            label = { Text("${reg.flag} ${if (isFa) reg.nameFa else reg.nameEn}") },
-                        )
-                    }
+                    FilterChip(
+                        selected = !isAkamaiStandalone,
+                        onClick = {
+                            holder.updateApp { it.copy(activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.DEFAULT) }
+                            holder.updateAether {
+                                it.copy(
+                                    psiphonEnabled = false,
+                                    psiphonMode = PsiphonChainMode.WARP_TO_PSIPHON,
+                                    torEnabled = false,
+                                )
+                            }
+                        },
+                        label = { Text(dtr("AETHER (WARP / MASQUE)", "AETHER (وارپ و زنجیره)"), maxLines = 1) },
+                    )
+                    FilterChip(
+                        selected = isAkamaiStandalone,
+                        onClick = {
+                            holder.updateApp { it.copy(activePreset = OneTapPreset.PSIPHON_AKAMAI_CDN, exitNode = ExitNode.PSIPHON) }
+                            holder.updateAether {
+                                it.copy(
+                                    psiphonEnabled = true,
+                                    psiphonMode = PsiphonChainMode.STANDALONE_CDN,
+                                    psiphonCdnSets = it.psiphonCdnSets.ifBlank { "psiphon-akamai" },
+                                    torEnabled = false,
+                                )
+                            }
+                        },
+                        label = { Text(dtr("Akamai / Psiphon CDN", "اکامای / سایفون CDN"), maxLines = 1) },
+                    )
                 }
-                if (aether.psiphonEnabled || app.activePreset == OneTapPreset.WARP_TO_PSIPHON || app.activePreset == OneTapPreset.PSIPHON_AKAMAI_CDN) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        dtr(
-                            "Psiphon & Akamai CDN Mode (Shir o Khorshid style — standalone CDN works even when WARP is blocked)",
-                            "حالت سایفون و فرانتینگ Akamai / CDN (روش شیر و خورشید — حتی وقتی WARP بسته است متصل می‌شود)",
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PsiphonChainMode.entries.forEach { pm ->
-                            FilterChip(
-                                selected = aether.psiphonMode == pm,
-                                onClick = { holder.updateAether { it.copy(psiphonMode = pm) } },
-                                label = { Text(if (isFa) pm.labelFa else pm.labelEn) },
-                            )
+
+                Spacer(Modifier.height(10.dp))
+                if (isAkamaiStandalone) {
+                    // Clean Akamai CDN Fronting section — NO WARP/Country confusion
+                    val setOptions = listOf("" to dtr("All Sets (Auto)", "همه پکیج‌ها (خودکار)")) + PsiphonCdnCatalog.availableCdnSets
+                    val activeSet = setOptions.firstOrNull { it.first.equals(aether.psiphonCdnSets.trim(), ignoreCase = true) }
+                        ?: setOptions.first()
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        DesktopDropdownButton(
+                            label = "CDN Set",
+                            selectedText = activeSet.second,
+                            options = setOptions,
+                            selectedItem = activeSet,
+                            optionLabel = { it.second },
+                            onSelect = { pair -> holder.updateAether { it.copy(psiphonCdnSets = pair.first) } },
+                            icon = Icons.Rounded.Cloud,
+                        )
+                        OutlinedButton(
+                            onClick = { holder.testAndSortPsiphonCdnEdges() },
+                            enabled = !state.isScanning && aether.psiphonCdnFrontingIps.isNotBlank(),
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Text(if (state.isScanning) dtr("Testing...", "تست...") else dtr("Test Edge IPs", "تست IPها"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        dtr("Built-in CDN Edge Sets (Optional — blank tests all):", "پکیج‌های آی‌پی CDN داخلی (خالی = همه):"),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    val activeSets = aether.psiphonCdnSets.split(',', ';', '\n', ' ').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PsiphonCdnCatalog.availableCdnSets.forEach { (id, label) ->
-                            val selected = id in activeSets
-                            FilterChip(
-                                selected = selected,
-                                onClick = {
-                                    val next = if (selected) activeSets - id else activeSets + id
-                                    holder.updateAether { it.copy(psiphonCdnSets = next.joinToString(",")) }
-                                },
-                                label = { Text(label) },
-                            )
+                        OutlinedButton(
+                            onClick = { holder.selectTab(DesktopTab.SCANNER) },
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Text(dtr("Open Scanner", "اسکنر Akamai"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -271,129 +319,246 @@ fun AetherDesktopTab(
                         OutlinedTextField(
                             value = aether.psiphonCdnFrontingIps,
                             onValueChange = { v -> holder.updateAether { it.copy(psiphonCdnFrontingIps = v) } },
-                            label = { Text(dtr("CDN Edge IPs / CIDRs (Akamai, Cloudflare, etc.)", "آی‌پی / رنج‌های Akamai و CDN (کاما یا خط جدید)")) },
-                            placeholder = { Text("23.x.x.x, 104.x.x.x ...") },
+                            label = { Text(dtr("CDN Edge IPs / CIDRs", "آی‌پی / رنج‌های Akamai و CDN")) },
+                            trailingIcon = if (aether.psiphonCdnFrontingIps.isNotBlank()) {
+                                {
+                                    IconButton(onClick = { holder.clearAppliedCdnIps() }) {
+                                        Icon(Icons.Rounded.Clear, contentDescription = "Clear CDN IPs", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            } else null,
                             minLines = 2,
-                            maxLines = 4,
-                            modifier = Modifier.weight(1.1f),
+                            maxLines = 3,
+                            modifier = Modifier.weight(1.2f),
                         )
                         OutlinedTextField(
                             value = aether.psiphonCdnSniHostnames,
                             onValueChange = { v -> holder.updateAether { it.copy(psiphonCdnSniHostnames = v) } },
                             label = { Text(dtr("CDN SNI Hostnames (optional)", "SNIهای فرانتینگ (اختیاری)")) },
-                            placeholder = { Text("comma, space, or newline separated; empty tests no-SNI too") },
                             minLines = 2,
-                            maxLines = 4,
+                            maxLines = 3,
                             modifier = Modifier.weight(1f),
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(
-                            onClick = { holder.testAndSortPsiphonCdnEdges() },
-                            enabled = !state.isScanning && aether.psiphonCdnFrontingIps.isNotBlank(),
-                            shape = RoundedCornerShape(10.dp),
-                        ) {
-                            Text(if (state.isScanning) dtr("Testing Edge IPs...", "در حال تست آی‌پی‌ها...") else dtr("Test & Rank Edge IPs", "تست و مرتب‌سازی آی‌پی‌ها"))
-                        }
-                        OutlinedButton(
-                            onClick = { holder.selectTab(DesktopTab.SCANNER) },
-                            shape = RoundedCornerShape(10.dp),
-                        ) {
-                            Text(dtr("Open Akamai Scanner", "بازکردن اسکنر Akamai"))
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            DesktopCard {
-                Text(dtr("AETHER Anti-DPI & Endpoint Settings", "تنظیمات ضد فیلتر و اندپوینت"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                DesktopSwitchRow(
-                    title = dtr("Auto-Scan Diverse Endpoint (Don't Lock 1 IP)", "اسکن متنوع اندپوینت (عدم قفل روی یک IP)"),
-                    subtitle = dtr("When ON, probes diverse Cloudflare WARP subnets on connect instead of retrying the same IP.", "اگر روشن باشد، هر بار بین رنج‌های متنوع WARP اسکن می‌کند و روی یک آی‌پی قفل نمی‌شود."),
-                    checked = aether.scanForEndpoint,
-                    onCheckedChange = { c -> holder.updateAether { it.copy(scanForEndpoint = c) } },
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = aether.endpointIp,
-                        onValueChange = { v -> holder.updateAether { it.copy(endpointIp = v, scanForEndpoint = v.isBlank()) } },
-                        label = { Text(dtr("Saved Endpoint IP (empty = Auto Scan)", "آی‌پی اندپوینت (خالی = اسکن خودکار)")) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1.5f),
-                    )
-                    OutlinedTextField(
-                        value = aether.endpointPort.toString(),
-                        onValueChange = { v -> v.toIntOrNull()?.let { p -> holder.updateAether { it.copy(endpointPort = p) } } },
-                        label = { Text(dtr("Port", "پورت")) },
-                        singleLine = true,
-                        modifier = Modifier.weight(0.7f),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AetherScanMode.entries.forEach { sm ->
-                        FilterChip(
-                            selected = aether.scanMode == sm,
-                            onClick = { holder.updateAether { it.copy(scanMode = sm) } },
-                            label = { Text("Scan: ${sm.cliValue}") },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                DesktopSwitchRow(
-                    title = dtr("Fragment TLS ClientHello", "تکه‌تکه کردن TLS (Fragment)"),
-                    subtitle = dtr("Keep OFF if logs show 'TLS handshake unexpected EOF'.", "اگر در لاگ خطای unexpected EOF دیدید خاموش بگذارید."),
-                    checked = aether.fragmentEnabled,
-                    onCheckedChange = { c -> holder.updateAether { it.copy(fragmentEnabled = c) } },
-                )
-                DesktopSwitchRow(
-                    title = dtr("Enable ECH (Encrypted ClientHello)", "فعال‌سازی ECH"),
-                    subtitle = dtr("Off by default (experimental — leave OFF if handshakes fail).", "پیش‌فرض خاموش (آزمایشی — در صورت خطا در اتصال خاموش بگذارید)."),
-                    checked = aether.echEnabled,
-                    onCheckedChange = { c -> holder.updateAether { it.copy(echEnabled = c) } },
-                )
-                DesktopSwitchRow(
-                    title = dtr("3-Stage Smart ECH Bootstrap (DoH / DoT / Port-53 + Shared CF ECH)", "دریافت هوشمند ECH (DoH/DoT/پورت۵۳ و قرض کلودفلر)"),
-                    subtitle = dtr("Automatically fetches unblocked Cloudflare ECHConfig when UDP 53 ECH lookups are censored.", "اگر استعلام ECH مسدود باشد به صورت خودکار از DoH/DoT یا دامنه‌های باز کلودفلر می‌گیرد."),
-                    checked = aether.smartEchBootstrap,
-                    onCheckedChange = { c -> holder.updateAether { it.copy(smartEchBootstrap = c) } },
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedButton(
-                        onClick = { holder.fetchEchConfigNow() },
-                        enabled = !state.isFetchingEch,
-                        shape = RoundedCornerShape(10.dp),
+                } else {
+                    // Clean WARP/AETHER Dropdowns: Protocol + Transport + Exit Chain + Exit Country (when Psiphon active)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (state.isFetchingEch) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text(dtr("Fetch ECH Config Now", "دریافت ECH الان"))
-                    }
-                    if (aether.echBase64Override.isNotBlank()) {
-                        DesktopBadgePill(
-                            text = dtr("ECH Ready ✓", "کلید ECH آماده ✓"),
-                            containerColor = Color(0xFF10B981).copy(alpha = 0.16f),
-                            contentColor = Color(0xFF10B981),
+                        DesktopDropdownButton(
+                            label = dtr("Protocol", "پروتکل"),
+                            selectedText = aether.protocol.label,
+                            options = AetherProtocol.entries,
+                            selectedItem = aether.protocol,
+                            optionLabel = { it.label },
+                            onSelect = { proto ->
+                                val nextPreset = when (proto) {
+                                    AetherProtocol.WIREGUARD_OVER_MASQUE -> OneTapPreset.WG_OVER_MASQUE
+                                    AetherProtocol.MASQUE_IN_MASQUE -> OneTapPreset.MASQUE_IN_MASQUE
+                                    else -> OneTapPreset.WARP_FAST_MASQUE_H2
+                                }
+                                holder.updateApp { it.copy(activePreset = if (aether.psiphonEnabled) OneTapPreset.WARP_TO_PSIPHON else nextPreset) }
+                                holder.updateAether { it.copy(protocol = proto) }
+                            },
+                            icon = Icons.Rounded.Router,
                         )
+                        if (aether.protocol == AetherProtocol.MASQUE ||
+                            aether.protocol == AetherProtocol.MASQUE_IN_MASQUE ||
+                            aether.protocol == AetherProtocol.WIREGUARD_OVER_MASQUE
+                        ) {
+                            DesktopDropdownButton(
+                                label = dtr("Transport", "انتقال"),
+                                selectedText = aether.masqueTransport.label,
+                                options = MasqueTransport.entries,
+                                selectedItem = aether.masqueTransport,
+                                optionLabel = { it.label },
+                                onSelect = { tr -> holder.updateAether { it.copy(masqueTransport = tr) } },
+                                icon = Icons.Rounded.SwapHoriz,
+                            )
+                        }
+                        DesktopDropdownButton(
+                            label = dtr("Chain", "زنجیره"),
+                            selectedText = if (isFa) activeChain.labelFa else activeChain.labelEn,
+                            options = DesktopExitChainOption.entries,
+                            selectedItem = activeChain,
+                            optionLabel = { ch -> if (isFa) ch.labelFa else ch.labelEn },
+                            onSelect = { opt ->
+                                when (opt) {
+                                    DesktopExitChainOption.DIRECT_WARP -> {
+                                        holder.updateApp { it.copy(exitNode = ExitNode.DEFAULT, activePreset = OneTapPreset.WARP_FAST_MASQUE_H2) }
+                                        holder.updateAether { it.copy(psiphonEnabled = false, torEnabled = false) }
+                                    }
+                                    DesktopExitChainOption.CHAIN_PSIPHON -> {
+                                        holder.updateApp { it.copy(exitNode = ExitNode.PSIPHON, activePreset = OneTapPreset.WARP_TO_PSIPHON) }
+                                        holder.updateAether { it.copy(psiphonEnabled = true, psiphonMode = PsiphonChainMode.WARP_TO_PSIPHON, torEnabled = false) }
+                                    }
+                                    DesktopExitChainOption.REVERSE_PSIPHON -> {
+                                        holder.updateApp { it.copy(exitNode = ExitNode.PSIPHON, activePreset = OneTapPreset.WARP_TO_PSIPHON) }
+                                        holder.updateAether { it.copy(psiphonEnabled = true, psiphonMode = PsiphonChainMode.PSIPHON_TO_WARP, torEnabled = false) }
+                                    }
+                                    DesktopExitChainOption.CHAIN_TOR -> {
+                                        holder.updateApp { it.copy(exitNode = ExitNode.TOR, activePreset = OneTapPreset.WARP_TO_TOR) }
+                                        holder.updateAether { it.copy(psiphonEnabled = false, torEnabled = true) }
+                                    }
+                                }
+                            },
+                            icon = Icons.Rounded.Hub,
+                        )
+                        if (activeChain == DesktopExitChainOption.CHAIN_PSIPHON || activeChain == DesktopExitChainOption.REVERSE_PSIPHON) {
+                            DesktopDropdownButton(
+                                label = dtr("Country", "کشور"),
+                                selectedText = "${activeRegion.flag} ${if (isFa) activeRegion.nameFa else activeRegion.nameEn}",
+                                options = PnifoxRegionsCatalog.regions.take(18),
+                                selectedItem = activeRegion,
+                                optionLabel = { r -> "${r.flag} ${if (isFa) r.nameFa else r.nameEn}" },
+                                onSelect = { reg ->
+                                    holder.updateApp { it.copy(regionCode = reg.code) }
+                                    holder.updateAether { it.copy(psiphonExitCountry = reg.code) }
+                                },
+                                icon = Icons.Rounded.Public,
+                            )
+                        }
                     }
                 }
             }
         }
 
-        item {
-            ProtocolGuideDesktopCard()
+        // 4. Compact Endpoint & Anti-DPI Card (only when WARP/AETHER is active)
+        if (!isAkamaiStandalone) {
+            item {
+                DesktopCard {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            dtr("Endpoint & Anti-DPI", "اندپوینت و ضد فیلتر"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f),
+                        )
+                        DesktopInfoPopupButton(
+                            title = dtr("Anti-DPI & ECH Help", "توضیحات تنظیمات ضد فیلتر"),
+                            body = dtr(
+                                "• Auto-Scan probes diverse WARP subnets instead of locking onto one IP.\n• Fragment splits TLS ClientHello (turn OFF if unexpected EOF appears).\n• ECH is OFF by default (only enable if your network supports Cloudflare ECH).",
+                                "• اسکن خودکار هر بار رنج‌های متنوع WARP را تست می‌کند.\n• Fragment بسته‌های TLS را خرد می‌کند (در صورت خطای EOF خاموش کنید).\n• ECH پیش‌فرض خاموش است (فقط در صورت نیاز روشن کنید).",
+                            ),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        DesktopDropdownButton(
+                            label = dtr("Scan", "سبک اسکن"),
+                            selectedText = aether.scanMode.label,
+                            options = AetherScanMode.entries,
+                            selectedItem = aether.scanMode,
+                            optionLabel = { it.label },
+                            onSelect = { sm -> holder.updateAether { it.copy(scanMode = sm) } },
+                            icon = Icons.Rounded.Radar,
+                        )
+                        DesktopDropdownButton(
+                            label = "IP",
+                            selectedText = aether.ipVersion.label,
+                            options = IpVersionMode.entries,
+                            selectedItem = aether.ipVersion,
+                            optionLabel = { it.label },
+                            onSelect = { iv -> holder.updateAether { it.copy(ipVersion = iv) } },
+                        )
+                        DesktopDropdownButton(
+                            label = "Noize",
+                            selectedText = aether.noizeProfile.label,
+                            options = AetherNoizeProfile.entries,
+                            selectedItem = aether.noizeProfile,
+                            optionLabel = { it.label },
+                            onSelect = { nz -> holder.updateAether { it.copy(noizeProfile = nz) } },
+                            icon = Icons.Rounded.Shield,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    DesktopSwitchRow(
+                        title = dtr("Auto-Scan Diverse Endpoint", "اسکن خودکار و متنوع اندپوینت"),
+                        checked = aether.scanForEndpoint,
+                        onCheckedChange = { c -> holder.updateAether { it.copy(scanForEndpoint = c) } },
+                    )
+                    if (!aether.scanForEndpoint || aether.endpointIp.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = aether.endpointIp,
+                                onValueChange = { v -> holder.updateAether { it.copy(endpointIp = v, scanForEndpoint = v.isBlank()) } },
+                                label = { Text(dtr("Saved Endpoint IP", "آی‌پی اندپوینت")) },
+                                trailingIcon = if (aether.endpointIp.isNotBlank()) {
+                                    {
+                                        IconButton(onClick = { holder.clearAppliedEndpointIp() }) {
+                                            Icon(Icons.Rounded.Clear, contentDescription = "Clear IP", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                } else null,
+                                singleLine = true,
+                                modifier = Modifier.weight(1.5f),
+                            )
+                            OutlinedTextField(
+                                value = aether.endpointPort.toString(),
+                                onValueChange = { v -> v.toIntOrNull()?.let { p -> holder.updateAether { it.copy(endpointPort = p) } } },
+                                label = { Text(dtr("Port", "پورت")) },
+                                singleLine = true,
+                                modifier = Modifier.weight(0.7f),
+                            )
+                        }
+                    }
+                    DesktopSwitchRow(
+                        title = dtr("Fragment TLS ClientHello", "تکه‌تکه کردن TLS (Fragment)"),
+                        checked = aether.fragmentEnabled,
+                        onCheckedChange = { c -> holder.updateAether { it.copy(fragmentEnabled = c) } },
+                    )
+                    DesktopSwitchRow(
+                        title = dtr("Enable ECH (Default Off)", "فعال‌سازی ECH (پیش‌فرض خاموش)"),
+                        checked = aether.echEnabled,
+                        onCheckedChange = { c -> holder.updateAether { it.copy(echEnabled = c) } },
+                    )
+                    if (aether.echEnabled) {
+                        DesktopSwitchRow(
+                            title = dtr("Smart ECH Bootstrap (DoH/DoT/53)", "دریافت هوشمند ECH"),
+                            checked = aether.smartEchBootstrap,
+                            onCheckedChange = { c -> holder.updateAether { it.copy(smartEchBootstrap = c) } },
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedButton(
+                                onClick = { holder.fetchEchConfigNow() },
+                                enabled = !state.isFetchingEch,
+                                shape = RoundedCornerShape(10.dp),
+                            ) {
+                                if (state.isFetchingEch) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(6.dp))
+                                Text(dtr("Fetch ECH Now", "دریافت ECH"), maxLines = 1)
+                            }
+                            if (aether.echBase64Override.isNotBlank()) {
+                                DesktopBadgePill(
+                                    text = dtr("ECH Ready ✓", "ECH آماده ✓"),
+                                    containerColor = Color(0xFF10B981).copy(alpha = 0.16f),
+                                    contentColor = Color(0xFF10B981),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ServersDesktopTab(
     state: DesktopUiState,
@@ -431,9 +596,11 @@ fun ServersDesktopTab(
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = activeProfile?.let { "${it.name} (${it.address}:${it.port})" }
-                                ?: dtr("No server selected — import or pick one below", "سروری انتخاب نشده — از پایین اضافه یا انتخاب کنید"),
+                                ?: dtr("No server selected", "سروری انتخاب نشده است"),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                     Spacer(Modifier.width(16.dp))
@@ -444,27 +611,27 @@ fun ServersDesktopTab(
                     )
                 }
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { showImportDialog = true }, shape = RoundedCornerShape(10.dp)) {
                         Icon(Icons.Rounded.Add, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(dtr("Import URI / JSON", "ورود کانفیگ"))
+                        Spacer(Modifier.width(5.dp))
+                        Text(dtr("Import Config", "ورود کانفیگ"), maxLines = 1)
                     }
                     OutlinedButton(onClick = { showSubDialog = true }, shape = RoundedCornerShape(10.dp)) {
                         Icon(Icons.Rounded.Link, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(dtr("Add Subscription", "افزودن اشتراک"))
+                        Spacer(Modifier.width(5.dp))
+                        Text(dtr("Add Sub", "افزودن ساب"), maxLines = 1)
                     }
                     OutlinedButton(onClick = { holder.refreshAllSubscriptions() }, enabled = !state.isSyncingSubs, shape = RoundedCornerShape(10.dp)) {
                         if (state.isSyncingSubs) CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
                         else Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (state.isSyncingSubs) dtr("Syncing...", "در حال دریافت...") else dtr("Sync Subs", "بروزرسانی ساب"))
+                        Spacer(Modifier.width(5.dp))
+                        Text(if (state.isSyncingSubs) dtr("Syncing...", "دریافت...") else dtr("Sync Subs", "بروزرسانی ساب"), maxLines = 1)
                     }
                     OutlinedButton(onClick = { holder.pingAllProfiles() }, enabled = !state.isTestingAllServers, shape = RoundedCornerShape(10.dp)) {
                         Icon(Icons.Rounded.Speed, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (state.isTestingAllServers) dtr("Probing...", "تست...") else dtr("Test All Real Delay", "تست پینگ همه"))
+                        Spacer(Modifier.width(5.dp))
+                        Text(if (state.isTestingAllServers) dtr("Probing...", "تست...") else dtr("Test All", "تست پینگ"), maxLines = 1)
                     }
                 }
             }
@@ -496,7 +663,7 @@ fun ServersDesktopTab(
         if (persisted.profiles.isEmpty()) {
             item {
                 DesktopCard {
-                    Text(dtr("No server configs yet. Click 'Import URI / JSON' to paste VLESS, Reality, VMess, Trojan, Hy2, WireGuard, or MASQUE JSON.", "هنوز کانفیگی اضافه نشده است. روی «ورود کانفیگ» کلیک کنید."))
+                    Text(dtr("No server configs yet. Click 'Import Config' to add VLESS, Reality, VMess, Trojan, Hy2, WireGuard, or JSON.", "هنوز کانفیگی اضافه نشده است. روی «ورود کانفیگ» کلیک کنید."))
                 }
             }
         } else {
@@ -514,9 +681,9 @@ fun ServersDesktopTab(
                             Text(profile.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 text = if (profile.spoofLocalhost40443) {
-                                    "127.0.0.1:40443 (SNI Spoof) <- ${profile.address}:${profile.port} • SNI=${profile.spoofFakeSni.ifBlank { profile.sni }}"
+                                    "127.0.0.1:40443 <- ${profile.address}:${profile.port}"
                                 } else {
-                                    "${profile.address}:${profile.port} • ${profile.transport.uppercase()} • SNI=${profile.sni.ifBlank { "-" }}"
+                                    "${profile.address}:${profile.port} • ${profile.transport.uppercase()}"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -525,7 +692,7 @@ fun ServersDesktopTab(
                             )
                         }
                         val pingLabel = when {
-                            profile.lastPingMs == null -> if (selected) dtr("Selected", "انتخاب‌شده") else ""
+                            profile.lastPingMs == null -> if (selected) dtr("Active", "فعال") else ""
                             profile.lastPingMs!! < 0 -> dtr("Timeout", "تایم‌اوت")
                             else -> "${profile.lastPingMs} ms"
                         }
@@ -536,11 +703,11 @@ fun ServersDesktopTab(
                                 contentColor = if ((profile.lastPingMs ?: -1) > 0) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                         FilterChip(
                             selected = profile.spoofLocalhost40443,
                             onClick = { holder.toggleSpoof(profile) },
-                            label = { Text("SNI Spoof 40443", style = MaterialTheme.typography.labelSmall) },
+                            label = { Text("Spoof 40443", style = MaterialTheme.typography.labelSmall, maxLines = 1) },
                         )
                         IconButton(onClick = { holder.pingProfile(profile) }) { Icon(Icons.Rounded.Speed, "Real Ping") }
                         IconButton(onClick = { editingProfile = profile }) { Icon(Icons.Rounded.Edit, "Edit") }
@@ -558,12 +725,12 @@ fun ServersDesktopTab(
         var raw by remember { mutableStateOf(clipboard.getText()?.text.orEmpty()) }
         AlertDialog(
             onDismissRequest = { showImportDialog = false },
-            title = { Text(dtr("Import Configs or Subscription (URI / Base64 / YAML / JSON / URL)", "ورود کانفیگ یا لینک اشتراک")) },
+            title = { Text(dtr("Import Configs or Subscription", "ورود کانفیگ یا لینک اشتراک")) },
             text = {
                 OutlinedTextField(
                     value = raw,
                     onValueChange = { raw = it },
-                    label = { Text("vless://, vmess://, trojan://, hy2://, https://... sub link, Clash YAML or JSON") },
+                    label = { Text("vless://, vmess://, trojan://, hy2://, https://..., JSON") },
                     minLines = 5,
                     maxLines = 10,
                     modifier = Modifier.fillMaxWidth(),
@@ -644,7 +811,7 @@ fun ServersDesktopTab(
                         }
                         OutlinedTextField(value = sni, onValueChange = { sni = it }, label = { Text("SNI") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         if (spoof || !isJson) {
-                            OutlinedTextField(value = fakeSni, onValueChange = { fakeSni = it }, label = { Text(dtr("SNI Spoof 40443 Fake SNI", "SNI جعلی برای تونل 40443")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(value = fakeSni, onValueChange = { fakeSni = it }, label = { Text(dtr("SNI Spoof 40443 Fake SNI", "SNI جعلی برای 40443")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         }
                         OutlinedTextField(value = secret, onValueChange = { secret = it }, label = { Text(dtr("UUID / Password", "کلید / رمز")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -218,20 +218,6 @@ class SharedEnginesAndParsersTest {
     }
 
     @Test
-    fun `smart connect orchestrator promotes reliable arms and adapts priors`() {
-        val initial = SmartConnectOrchestrator.rankedArms(ScenarioGoalId.GAMING_LOW_PING, "")
-        assertEquals(StrategyArm.GAMING_DNS, initial.first())
-
-        var state = ""
-        repeat(4) {
-            state = SmartConnectOrchestrator.recordOutcome(state, StrategyArm.LOCAL_DPI_DESYNC, success = true, latencyMs = 80)
-            state = SmartConnectOrchestrator.recordOutcome(state, StrategyArm.GAMING_DNS, success = false, latencyMs = 4000)
-        }
-        val adapted = SmartConnectOrchestrator.rankedArms(ScenarioGoalId.LOCAL_DPI_ZERO_SERVER, state)
-        assertEquals(StrategyArm.LOCAL_DPI_DESYNC, adapted.first())
-    }
-
-    @Test
     fun `cdn scanner expandCidrs samples across diverse prefixes and wide cidr ranges`() {
         val wideCidrs = listOf(
             "23.0.0.0/12",

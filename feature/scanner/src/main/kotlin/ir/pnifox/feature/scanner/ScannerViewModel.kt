@@ -46,6 +46,7 @@ data class ScannerUiState(
     val allResults: List<ScanResultItem> = emptyList(),
     val filteredResults: List<ScanResultItem> = emptyList(),
     val cleanIpsMultiline: String = "",
+    val hasAppliedIps: Boolean = false,
     val statusNote: String? = null,
 )
 
@@ -78,7 +79,8 @@ class ScannerViewModel @Inject constructor(
         cfg,
         dataRepo.observeScanResults(),
         preferencesRepo.appSettingsFlow,
-    ) { rt, rows, app ->
+        preferencesRepo.aetherSettingsFlow,
+    ) { rt, rows, app, aether ->
         val providerRows = rows.filter { it.provider == rt.provider }
         val categorized = when (rt.categoryFilter) {
             ScanCategoryFilter.ALL -> providerRows
@@ -110,6 +112,7 @@ class ScannerViewModel @Inject constructor(
             allResults = providerRows,
             filteredResults = sorted,
             cleanIpsMultiline = app.cleanIpsMultiline,
+            hasAppliedIps = aether.endpointIp.isNotBlank() || aether.psiphonCdnFrontingIps.isNotBlank(),
             statusNote = rt.statusNote,
         )
     }.stateIn(
@@ -240,6 +243,33 @@ class ScannerViewModel @Inject constructor(
                 it.copy(endpointIp = item.ip, endpointPort = item.port, scanForEndpoint = false)
             }
             cfg.value = cfg.value.copy(statusNote = "Applied ${item.ip}:${item.port} as active AETHER endpoint.")
+        }
+    }
+
+    fun clearAppliedEndpointIp() {
+        viewModelScope.launch {
+            preferencesRepo.updateAetherSettings {
+                it.copy(endpointIp = "", scanForEndpoint = true)
+            }
+            cfg.value = cfg.value.copy(statusNote = "Cleared applied WARP endpoint IP (Auto-Scan enabled).")
+        }
+    }
+
+    fun clearAppliedCdnIps() {
+        viewModelScope.launch {
+            preferencesRepo.updateAetherSettings {
+                it.copy(psiphonCdnFrontingIps = "")
+            }
+            cfg.value = cfg.value.copy(statusNote = "Cleared applied Akamai / CDN fronting IPs.")
+        }
+    }
+
+    fun clearAllAppliedIps() {
+        viewModelScope.launch {
+            preferencesRepo.updateAetherSettings {
+                it.copy(endpointIp = "", scanForEndpoint = true, psiphonCdnFrontingIps = "")
+            }
+            cfg.value = cfg.value.copy(statusNote = "Cleared all applied IPs.")
         }
     }
 

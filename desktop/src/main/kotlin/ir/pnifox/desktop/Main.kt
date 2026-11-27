@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Radar
@@ -307,41 +306,40 @@ fun main() = application {
                         modifier = Modifier.weight(1f).fillMaxHeight().padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        // Top bar: Quick System Proxy vs TUN Mode switcher + Smart Auto-Connect + Corner Telegram Channel button
+                        // Top bar: Quick System Proxy vs TUN Mode switcher + Corner Telegram Channel button
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text(
-                                text = dtr("Mode:", "حالت اتصال:"),
+                                text = dtr("Mode:", "حالت:"),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
                             )
                             WindowsTunnelMode.entries.forEach { m ->
                                 FilterChip(
                                     selected = state.persisted.windowsTunnelMode == m,
                                     onClick = { holder.switchWindowsTunnelModeQuick(m) },
-                                    label = { Text(if (app.language == AppLanguage.PERSIAN) m.labelFa else m.labelEn, style = MaterialTheme.typography.labelSmall) },
+                                    label = {
+                                        Text(
+                                            if (app.language == AppLanguage.PERSIAN) m.labelFa else m.labelEn,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    },
                                 )
                             }
                             Spacer(Modifier.weight(1f))
-                            OutlinedButton(
-                                onClick = { holder.smartAutoConnect(state.persisted.selectedScenarioId) },
-                                enabled = !state.isSmartConnecting,
-                                shape = RoundedCornerShape(10.dp),
-                            ) {
-                                Icon(Icons.Rounded.AutoAwesome, null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.width(5.dp))
-                                Text(dtr("Smart Connect", "اتصال هوشمند"), style = MaterialTheme.typography.labelSmall)
-                            }
                             OutlinedButton(
                                 onClick = { holder.openTelegramChannel() },
                                 shape = RoundedCornerShape(10.dp),
                             ) {
                                 Icon(Icons.AutoMirrored.Rounded.Send, null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
                                 Spacer(Modifier.width(5.dp))
-                                Text(dtr("Telegram @otaqe_pni", "تلگرام ما"), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                Text(dtr("Telegram @otaqe_pni", "تلگرام ما"), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, maxLines = 1)
                             }
                         }
 

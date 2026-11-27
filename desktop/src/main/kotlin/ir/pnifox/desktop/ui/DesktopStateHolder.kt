@@ -95,9 +95,7 @@ data class DesktopUiState(
     val gamingPingResults: Map<String, Int?> = emptyMap(),
     val isTestingGamingPings: Boolean = false,
     val isFetchingEch: Boolean = false,
-    val isSmartConnecting: Boolean = false,
-    val smartConnectStatus: String = "",
-    val appVersion: String = "2.2.0",
+    val appVersion: String = "2.3.0",
 )
 
 private data class RuntimeUiFlags(
@@ -126,8 +124,6 @@ private data class RuntimeUiFlags(
     val gamingPingResults: Map<String, Int?> = emptyMap(),
     val isTestingGamingPings: Boolean = false,
     val isFetchingEch: Boolean = false,
-    val isSmartConnecting: Boolean = false,
-    val smartConnectStatus: String = "",
 )
 
 class DesktopStateHolder {
@@ -210,15 +206,13 @@ class DesktopStateHolder {
             gamingPingResults = f.gamingPingResults,
             isTestingGamingPings = f.isTestingGamingPings,
             isFetchingEch = f.isFetchingEch,
-            isSmartConnecting = f.isSmartConnecting,
-            smartConnectStatus = f.smartConnectStatus,
         )
     }.stateIn(scope, SharingStarted.Eagerly, DesktopUiState())
 
     init {
         if (store.stateFlow.value.appSettings.autoCheckUpdates) {
             scope.launch {
-                val res = updateChecker.checkLatestRelease("2.2.0")
+                val res = updateChecker.checkLatestRelease("2.3.0")
                 flags.value = flags.value.copy(updateState = res)
                 if (res is UpdateCheckState.UpdateAvailable &&
                     res.info.latestTag != store.stateFlow.value.appSettings.lastDismissedUpdateTag
@@ -382,15 +376,19 @@ class DesktopStateHolder {
         }
     }
 
-    fun smartAutoConnect(goal: ScenarioGoalId? = null) {
-        if (flags.value.isSmartConnecting) return
-        scope.launch {
-            flags.value = flags.value.copy(isSmartConnecting = true, smartConnectStatus = "Evaluating best routes...")
-            controller.smartAutoConnect(goal) { st ->
-                flags.value = flags.value.copy(smartConnectStatus = st)
-            }
-            flags.value = flags.value.copy(isSmartConnecting = false)
-        }
+    fun clearAppliedEndpointIp() {
+        store.updateAetherSettings { it.copy(endpointIp = "", scanForEndpoint = true) }
+        setBanner("Cleared applied WARP endpoint IP (Auto-Scan active).")
+    }
+
+    fun clearAppliedCdnIps() {
+        store.updateAetherSettings { it.copy(psiphonCdnFrontingIps = "") }
+        setBanner("Cleared applied Akamai / CDN IPs.")
+    }
+
+    fun clearAllAppliedIps() {
+        store.updateAetherSettings { it.copy(endpointIp = "", scanForEndpoint = true, psiphonCdnFrontingIps = "") }
+        setBanner("Cleared all applied IPs.")
     }
 
     fun toggleConnect(section: ActiveSectionEngine) {
@@ -877,7 +875,7 @@ class DesktopStateHolder {
         if (flags.value.updateState is UpdateCheckState.Checking) return
         scope.launch {
             flags.value = flags.value.copy(updateState = UpdateCheckState.Checking)
-            val res = updateChecker.checkLatestRelease("2.2.0")
+            val res = updateChecker.checkLatestRelease("2.3.0")
             flags.value = flags.value.copy(updateState = res)
         }
     }

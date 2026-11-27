@@ -15,29 +15,40 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,7 +65,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -412,23 +425,23 @@ fun DesktopFoxMascot(
             }
             Column(modifier = Modifier.weight(1f)) {
                 val headline = when {
-                    isConnected -> dtr("Connected & Protected", "متصل و ایمن")
-                    isConnecting -> dtr("Connecting Tunnel...", "در حال اتصال...")
+                    isConnected -> dtr("Connected", "متصل")
+                    isConnecting -> dtr("Connecting...", "در حال اتصال...")
                     errState != null -> dtr(errState.error.titleEn, errState.error.titleFa)
-                    else -> dtr("Ready on Windows", "آماده اتصال روی ویندوز")
+                    else -> dtr("Ready", "آماده اتصال")
                 }
                 val sub = when {
                     isConnecting -> (tunnelState as TunnelState.Connecting).let { dtr(it.stageLabelEn, it.stageLabelFa) }
                     isConnected -> (tunnelState as TunnelState.Connected).activeEndpoint
                     errState != null -> dtr(errState.error.reasonEn, errState.error.reasonFa)
-                    else -> dtr("Works on Windows 10 & Windows 11", "سازگار با ویندوز ۱۰ و ۱۱")
+                    else -> dtr("Tap power to start tunnel", "برای شروع دکمه اتصال را بزنید")
                 }
-                Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     text = sub,
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -440,10 +453,11 @@ fun DesktopFoxMascot(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Row(
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
                     modifier = Modifier.fillMaxWidth().padding(10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (onFallbackSystemProxy != null) {
                         Button(
@@ -451,9 +465,11 @@ fun DesktopFoxMascot(
                             shape = RoundedCornerShape(8.dp),
                         ) {
                             Text(
-                                dtr("Connect via System Proxy (No Admin)", "اتصال فوری بدون ادمین (System Proxy)"),
+                                dtr("Connect via System Proxy", "اتصال بدون ادمین (پروکسی)"),
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -463,8 +479,10 @@ fun DesktopFoxMascot(
                             shape = RoundedCornerShape(8.dp),
                         ) {
                             Text(
-                                dtr("Restart as Admin (Enable TUN)", "اجرا با دسترسی ادمین (TUN)"),
+                                dtr("Restart as Admin (TUN)", "اجرا با ادمین (TUN)"),
                                 style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -483,25 +501,132 @@ fun DesktopFoxMascot(
                 ) {
                     Text(
                         text = dtr(
-                            "System Proxy active — browsers work immediately. Suggestion: enable TUN Mode so online games (.exe) & all Windows apps route cleanly.",
-                            "اتصال با System Proxy برقرار است. پیشنهاد: برای عبور ترافیک گیم‌ها و همه برنامه‌های ویندوز، TUN Mode را روشن کنید.",
+                            "System Proxy active — enable TUN Mode to tunnel games & all apps.",
+                            "حالت پروکسی فعال است؛ برای عبور بازی‌ها و کل برنامه‌ها، TUN Mode را روشن کنید.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     if (onEnableTunMode != null) {
                         Button(onClick = onEnableTunMode, shape = RoundedCornerShape(8.dp)) {
-                            Text(dtr("Enable TUN Mode", "روشن کردن TUN Mode"), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                            Text(dtr("Enable TUN", "روشن کردن TUN"), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, maxLines = 1)
                         }
                     }
                     if (onDismissTunSuggestion != null) {
                         TextButton(onClick = onDismissTunSuggestion) {
-                            Text(dtr("Dismiss", "بستن"), style = MaterialTheme.typography.labelSmall)
+                            Text(dtr("Hide", "بستن"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun <T> DesktopDropdownButton(
+    label: String,
+    selectedText: String,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
+    selectedItem: T? = null,
+    icon: ImageVector? = null,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        Surface(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (icon != null) {
+                    Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                }
+                Text(
+                    text = if (label.isNotBlank()) "$label: $selectedText" else selectedText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Icon(Icons.Rounded.KeyboardArrowDown, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 360.dp),
+        ) {
+            options.forEach { item ->
+                val isSelected = selectedItem == item
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = optionLabel(item),
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (isSelected) {
+                                Icon(Icons.Rounded.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
+                            }
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelect(item)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DesktopInfoPopupButton(
+    title: String,
+    body: String,
+    buttonLabel: String = dtr("Info", "توضیحات"),
+    modifier: Modifier = Modifier,
+) {
+    var open by remember { mutableStateOf(false) }
+    OutlinedButton(
+        onClick = { open = true },
+        shape = RoundedCornerShape(10.dp),
+        modifier = modifier,
+    ) {
+        Icon(Icons.Rounded.Info, null, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(buttonLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text(title, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                    Text(body, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { open = false }) {
+                    Text(dtr("Close", "بستن"))
+                }
+            },
+        )
     }
 }
 

@@ -294,7 +294,7 @@ fun ScenarioPresetsDesktopCard(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    dtr("Pick what you want to do — pnifox tunes protocol, ECH, DNS & routing automatically.", "هدفتان را انتخاب کنید تا بهترین پروتکل، DNS و تنظیمات خودکار اعمال شود."),
+                    dtr("Pick what you want to do — pnifox tunes protocol, DNS & routing automatically.", "هدفتان را انتخاب کنید تا بهترین پروتکل، DNS و تنظیمات خودکار اعمال شود."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

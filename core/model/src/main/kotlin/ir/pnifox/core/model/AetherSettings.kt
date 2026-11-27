@@ -93,7 +93,7 @@ data class AetherSettings(
     val fragmentSizeBytes: String = "8-16",
     val fragmentDelayMs: String = "2-10",
     val echEnabled: Boolean = false,
-    val smartEchBootstrap: Boolean = true,
+    val smartEchBootstrap: Boolean = false,
     val echBase64Override: String = "",
     val echDns: String = "udp://1.1.1.1",
     val echDomain: String = "cloudflare-ech.com",

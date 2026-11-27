@@ -715,6 +715,7 @@ fun HomeRoute(
                             }
                             PnifoxSwitchRow(
                                 title = "Encrypted Client Hello (--ech auto)",
+                                subtitle = tr("Off by default (experimental — leave OFF if connections fail)", "پیش‌فرض خاموش (آزمایشی — در صورت خطا در اتصال خاموش بگذارید)"),
                                 checked = state.aetherSettings.echEnabled,
                                 onCheckedChange = { c -> viewModel.updateAether { it.copy(echEnabled = c) } },
                             )

@@ -262,6 +262,7 @@ fun AetherDesktopTab(
                 )
                 DesktopSwitchRow(
                     title = dtr("Enable ECH (Encrypted ClientHello)", "فعال‌سازی ECH"),
+                    subtitle = dtr("Off by default (experimental — leave OFF if handshakes fail).", "پیش‌فرض خاموش (آزمایشی — در صورت خطا در اتصال خاموش بگذارید)."),
                     checked = aether.echEnabled,
                     onCheckedChange = { c -> holder.updateAether { it.copy(echEnabled = c) } },
                 )

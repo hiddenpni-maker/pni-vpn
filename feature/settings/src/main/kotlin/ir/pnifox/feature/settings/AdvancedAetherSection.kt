@@ -136,6 +136,7 @@ fun AdvancedAetherSection(
         }
         PnifoxSwitchRow(
             title = "Encrypted Client Hello (--ech auto)",
+            subtitle = "Off by default (experimental — leave OFF if handshakes fail).",
             checked = aether.echEnabled,
             onCheckedChange = { c -> onUpdateAether { it.copy(echEnabled = c) } },
         )

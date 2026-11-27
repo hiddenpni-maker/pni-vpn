@@ -40,10 +40,26 @@ class WindowsStore(
 
     private fun loadInitial(): DesktopPersistedState {
         dataDir.mkdirs()
-        if (!stateFile.exists()) return DesktopPersistedState()
-        return runCatching {
+        if (!stateFile.exists()) return DesktopPersistedState(echDefaultOffMigrated = true)
+        val loaded = runCatching {
             json.decodeFromString<DesktopPersistedState>(stateFile.readText(Charsets.UTF_8))
-        }.getOrDefault(DesktopPersistedState())
+        }.getOrNull() ?: return DesktopPersistedState(echDefaultOffMigrated = true)
+        if (!loaded.echDefaultOffMigrated) {
+            val migrated = loaded.copy(
+                echDefaultOffMigrated = true,
+                aetherSettings = loaded.aetherSettings.copy(
+                    echEnabled = false,
+                    smartEchBootstrap = false,
+                    warpApiUseEch = false,
+                    echBase64Override = "",
+                ),
+            )
+            runCatching {
+                stateFile.writeText(json.encodeToString(migrated), Charsets.UTF_8)
+            }
+            return migrated
+        }
+        return loaded
     }
 
     fun update(transform: (DesktopPersistedState) -> DesktopPersistedState): DesktopPersistedState {
@@ -167,6 +183,7 @@ class WindowsStore(
 
     fun resetDefaults() = update { cur ->
         DesktopPersistedState(
+            echDefaultOffMigrated = true,
             profiles = cur.profiles,
             subscriptions = cur.subscriptions,
         )

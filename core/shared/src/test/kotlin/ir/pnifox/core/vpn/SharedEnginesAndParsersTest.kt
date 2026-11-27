@@ -191,7 +191,21 @@ class SharedEnginesAndParsersTest {
     }
 
     @Test
-    fun `aether arg builder passes overridden ech base64 config when populated`() {
+    fun `ech is disabled by default across settings and scenarios and still honors explicit override`() {
+        val defaultSettings = AetherSettings()
+        assertFalse(defaultSettings.echEnabled)
+        assertFalse(defaultSettings.smartEchBootstrap)
+        assertFalse(defaultSettings.warpApiUseEch)
+        assertTrue(ir.pnifox.core.model.PnifoxScenarioCatalog.scenarios.none { it.recommendedEch })
+
+        val defaultArgs = AetherArgBuilder().buildRunArgs(
+            appSettings = AppSettings(),
+            aether = defaultSettings,
+            nativeDir = ".",
+            workDir = File("."),
+        )
+        assertFalse(defaultArgs.contains("--ech"))
+
         val args = AetherArgBuilder().buildRunArgs(
             appSettings = AppSettings(),
             aether = AetherSettings(echEnabled = true, echBase64Override = "AEn+DQB6123456"),

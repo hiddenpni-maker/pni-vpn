@@ -2,6 +2,7 @@ package ir.pnifox.core.database
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import ir.pnifox.core.model.AetherSettings
@@ -10,8 +11,10 @@ import ir.pnifox.core.model.DnsTunnelSettings
 import ir.pnifox.core.model.GamingSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,6 +26,7 @@ class PreferencesRepository @Inject constructor(
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+    private val echMigrationChecked = AtomicBoolean(false)
 
     private companion object {
         val KEY_APP_SETTINGS = stringPreferencesKey("app_settings_json")
@@ -32,6 +36,29 @@ class PreferencesRepository @Inject constructor(
         val KEY_GAMING_SETTINGS = stringPreferencesKey("gaming_settings_json")
         val KEY_BANDIT_SCORES = stringPreferencesKey("smart_bandit_scores_json")
         val KEY_SELECTED_SCENARIO = stringPreferencesKey("selected_scenario_id")
+        val KEY_ECH_DEFAULT_OFF_MIGRATED = booleanPreferencesKey("ech_default_off_migrated")
+    }
+
+    private suspend fun migrateEchDefaultOffIfNeeded() {
+        if (!echMigrationChecked.compareAndSet(false, true)) return
+        dataStore.edit { prefs ->
+            if (prefs[KEY_ECH_DEFAULT_OFF_MIGRATED] != true) {
+                val cur = prefs[KEY_AETHER_SETTINGS]?.let { raw ->
+                    runCatching { json.decodeFromString<AetherSettings>(raw) }.getOrNull()
+                }
+                if (cur != null) {
+                    prefs[KEY_AETHER_SETTINGS] = json.encodeToString(
+                        cur.copy(
+                            echEnabled = false,
+                            smartEchBootstrap = false,
+                            warpApiUseEch = false,
+                            echBase64Override = "",
+                        ),
+                    )
+                }
+                prefs[KEY_ECH_DEFAULT_OFF_MIGRATED] = true
+            }
+        }
     }
 
     val appSettingsFlow: Flow<AppSettings> = dataStore.data.map { prefs ->
@@ -40,11 +67,13 @@ class PreferencesRepository @Inject constructor(
         } ?: AppSettings()
     }
 
-    val aetherSettingsFlow: Flow<AetherSettings> = dataStore.data.map { prefs ->
-        prefs[KEY_AETHER_SETTINGS]?.let { raw ->
-            runCatching { json.decodeFromString<AetherSettings>(raw) }.getOrNull()
-        } ?: AetherSettings()
-    }
+    val aetherSettingsFlow: Flow<AetherSettings> = dataStore.data
+        .onStart { migrateEchDefaultOffIfNeeded() }
+        .map { prefs ->
+            prefs[KEY_AETHER_SETTINGS]?.let { raw ->
+                runCatching { json.decodeFromString<AetherSettings>(raw) }.getOrNull()
+            } ?: AetherSettings()
+        }
 
     val dnsSettingsFlow: Flow<DnsTunnelSettings> = dataStore.data.map { prefs ->
         prefs[KEY_DNS_SETTINGS]?.let { raw ->
@@ -139,6 +168,7 @@ class PreferencesRepository @Inject constructor(
             prefs[KEY_DNS_SETTINGS] = json.encodeToString(DnsTunnelSettings())
             prefs[KEY_MHR_SETTINGS] = json.encodeToString(ir.pnifox.core.model.MhrSettings())
             prefs[KEY_GAMING_SETTINGS] = json.encodeToString(GamingSettings())
+            prefs[KEY_ECH_DEFAULT_OFF_MIGRATED] = true
             prefs.remove(KEY_BANDIT_SCORES)
             prefs.remove(KEY_SELECTED_SCENARIO)
         }

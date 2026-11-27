@@ -57,6 +57,7 @@ data class DesktopPersistedState(
     val selectedScenarioId: ScenarioGoalId? = null,
     val banditStateJson: String = "",
     val tunPromptDismissed: Boolean = false,
+    val echDefaultOffMigrated: Boolean = false,
     val profiles: List<ProxyProfile> = emptyList(),
     val subscriptions: List<SubscriptionGroup> = emptyList(),
     val warpKeys: List<WarpKey> = emptyList(),

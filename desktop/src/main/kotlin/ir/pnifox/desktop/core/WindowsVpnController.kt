@@ -2,14 +2,18 @@ package ir.pnifox.desktop.core
 
 import ir.pnifox.core.model.ActiveSectionEngine
 import ir.pnifox.core.model.AetherIdentityTarget
+import ir.pnifox.core.model.AetherProtocol
 import ir.pnifox.core.model.AetherSettings
 import ir.pnifox.core.model.AppSettings
 import ir.pnifox.core.model.ConnectionError
 import ir.pnifox.core.model.CoreEngine
 import ir.pnifox.core.model.DnsEngineType
 import ir.pnifox.core.model.DnsInnerProtocol
+import ir.pnifox.core.model.DnsTunnelMode
 import ir.pnifox.core.model.DnsTunnelSettings
 import ir.pnifox.core.model.ExitNode
+import ir.pnifox.core.model.GamingMode
+import ir.pnifox.core.model.GamingSettings
 import ir.pnifox.core.model.LogLevel
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.MhrDefaultSniPool
@@ -19,16 +23,24 @@ import ir.pnifox.core.model.MhrSniTestResult
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.ProxyProfile
 import ir.pnifox.core.model.ProxyProtocol
+import ir.pnifox.core.model.PnifoxScenarioCatalog
+import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.vpn.AetherArgBuilder
 import ir.pnifox.core.vpn.ConfigBuilders
+import ir.pnifox.core.vpn.DnsE2EResult
+import ir.pnifox.core.vpn.DnsE2EScanner
+import ir.pnifox.core.vpn.EchBootstrapResolver
 import ir.pnifox.core.vpn.JvmCdnScanner
 import ir.pnifox.core.vpn.JvmScanCandidateResult
 import ir.pnifox.core.vpn.JvmScanProgress
+import ir.pnifox.core.vpn.LocalDpiDesyncServer
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.MhrConfigBuilder
 import ir.pnifox.core.vpn.RealDelaySocketProber
+import ir.pnifox.core.vpn.SmartConnectOrchestrator
 import ir.pnifox.core.vpn.SniSpoofServer
+import ir.pnifox.core.vpn.StrategyArm
 import ir.pnifox.desktop.model.WindowsBinaryStatus
 import ir.pnifox.desktop.model.WindowsTunnelMode
 import ir.pnifox.desktop.storage.WindowsStore
@@ -108,6 +120,7 @@ class WindowsVpnController(
     @Volatile private var coreProcess: Process? = null
     @Volatile private var secondaryProcess: Process? = null
     @Volatile private var gatewayProcess: Process? = null
+    @Volatile private var localDesyncServer: LocalDpiDesyncServer? = null
     @Volatile private var activeHttpGatewayPort: Int? = null
     @Volatile private var activeSocksGatewayPort: Int? = null
 
@@ -191,9 +204,14 @@ class WindowsVpnController(
                 if (!isMhrProxyOnly && tunMode == WindowsTunnelMode.TUN_WINTUN && !WindowsPrivilegeHelper.isAdministrator()) {
                     _tunnelState.value = TunnelState.Error(
                         section,
-                        ConnectionError.PermissionDenied(),
+                        ConnectionError.PermissionDenied(
+                            titleEn = "TUN Mode Requires Administrator",
+                            titleFa = "حالت TUN نیاز به دسترسی ادمین دارد",
+                            reasonEn = "Wintun virtual adapter needs Administrator privileges on Windows. Click 'Connect via System Proxy (No Admin)' for instant browsing, or 'Restart as Admin' to enable TUN Mode for games and all apps.",
+                            reasonFa = "حالت TUN برای ساخت کارت شبکه مجازی به دسترسی ادمین نیاز دارد. می‌توانید همین الان با System Proxy (بدون ادمین) متصل شوید یا «اجرا با دسترسی ادمین» را بزنید.",
+                        ),
                     )
-                    logs.append("TUN", LogLevel.ERROR, "TUN (Wintun) mode requires Administrator privileges. Click 'Restart as Admin' or switch to System Proxy.")
+                    logs.append("TUN", LogLevel.ERROR, "TUN (Wintun) requires Administrator. Use 'Connect via System Proxy' or 'Restart as Admin'.")
                     return@withLock
                 }
 
@@ -201,6 +219,17 @@ class WindowsVpnController(
                     _tunnelState.value = TunnelState.Error(
                         section,
                         ConnectionError.ProcessExited(-1, "Select or import a server profile first."),
+                    )
+                    return@withLock
+                }
+
+                if (section == ActiveSectionEngine.GAMING &&
+                    persisted.gamingSettings.mode == GamingMode.CUSTOM_SERVER &&
+                    profile == null
+                ) {
+                    _tunnelState.value = TunnelState.Error(
+                        section,
+                        ConnectionError.ProcessExited(-1, "Select or import a game server profile in Servers first."),
                     )
                     return@withLock
                 }
@@ -215,7 +244,7 @@ class WindowsVpnController(
                     pickInternalCoreSocksPort(gatewaySocksPort, gatewayHttpPort)
                 }
 
-                val engine = resolveEngine(section, profile, dns)
+                val engine = resolveEngine(section, profile, dns, persisted.gamingSettings)
                 val connectModeLabel = if (isMhrProxyOnly) "Proxy Only" else tunMode.labelEn
                 _tunnelState.value = TunnelState.Connecting(
                     section = section,
@@ -250,6 +279,54 @@ class WindowsVpnController(
                             },
                             onLastLine = { lastLogLine = it },
                         )
+                    }
+                    ActiveSectionEngine.GAMING -> {
+                        val gaming = persisted.gamingSettings
+                        when (gaming.mode) {
+                            GamingMode.DNS_ANTI_SANCTION -> {
+                                activeEndpointLabel = "Game DNS • ${gaming.selectedDnsIp}"
+                                startGamingDns(gaming, app, internalSocksPort) { lastLogLine = it }
+                            }
+                            GamingMode.LOCAL_DPI_DESYNC -> {
+                                activeEndpointLabel = "Local DPI Desync (No Server)"
+                                startLocalDesync(gaming, internalSocksPort)
+                            }
+                            GamingMode.AETHER_UDP_QUIC -> {
+                                activeEndpointLabel = "Gaming QUIC v2 • WARP"
+                                val tuned = aether.copy(
+                                    protocol = AetherProtocol.MASQUE,
+                                    masqueTransport = MasqueTransport.HTTP3,
+                                    quicV2Enabled = gaming.preferQuicV2H3,
+                                    psiphonEnabled = false,
+                                    torEnabled = false,
+                                )
+                                val tunedApp = app.copy(
+                                    activePreset = OneTapPreset.WARP_FAST_MASQUE_H2,
+                                    exitNode = ExitNode.DEFAULT,
+                                    mtu = gaming.udpMtu,
+                                    bypassIranEnabled = gaming.bypassIranGameTraffic,
+                                )
+                                startAether(
+                                    app = tunedApp,
+                                    aether = tuned,
+                                    coreSocksPort = internalSocksPort,
+                                    onStage = { en, fa ->
+                                        _tunnelState.value = TunnelState.Connecting(section, en, fa, "127.0.0.1:$gatewaySocksPort")
+                                    },
+                                    onDiscovered = { ip, port ->
+                                        bypassIps += ip
+                                        activeEndpointLabel = "Gaming QUIC • $ip:$port"
+                                    },
+                                    onLastLine = { lastLogLine = it },
+                                )
+                            }
+                            GamingMode.CUSTOM_SERVER -> {
+                                val p = profile!!
+                                bypassIps += p.address
+                                activeEndpointLabel = "Game Server • ${p.name}"
+                                startCustomServer(p, app, internalSocksPort) { lastLogLine = it }
+                            }
+                        }
                     }
                     ActiveSectionEngine.SERVER -> {
                         val p = profile!!
@@ -415,9 +492,26 @@ class WindowsVpnController(
             )
 
         val routesFile = argBuilder.writeRoutesFileIfNeeded(innerApp, dir)
+        val effectiveAether = if (innerAether.echEnabled && innerAether.smartEchBootstrap && innerAether.echBase64Override.isBlank()) {
+            onStage("Bootstrapping ECH config (DoH / DoT / Port-53)...", "در حال دریافت هوشمند ECH از شبکه...")
+            val bootstrapped = withContext(Dispatchers.IO) {
+                EchBootstrapResolver.resolveEchConfig(
+                    targetDomain = innerAether.echDomain.ifBlank { "cloudflare-ech.com" },
+                    customDohOrDns = innerAether.echDns,
+                    onLog = { msg -> logs.append("ECH-Bootstrap", LogLevel.INFO, msg) },
+                )
+            }
+            if (bootstrapped != null) {
+                innerAether.copy(echBase64Override = bootstrapped.echConfigBase64)
+            } else {
+                innerAether
+            }
+        } else {
+            innerAether
+        }
         val args = argBuilder.buildRunArgs(
             appSettings = innerApp,
-            aether = innerAether,
+            aether = effectiveAether,
             nativeDir = coreLocator.resolveCoresDirectory().absolutePath,
             workDir = dir,
             psiphonServersDatPath = null,
@@ -533,7 +627,13 @@ class WindowsVpnController(
 
         val innerApp = app.copy(allowLan = false)
         val isRawJson = profile.rawUri.trimStart().startsWith("{")
-        if (!isRawJson && (profile.protocol == ProxyProtocol.HYSTERIA2 || profile.protocol == ProxyProtocol.WIREGUARD)) {
+        val useSingBox = !isRawJson && (
+            profile.protocol == ProxyProtocol.HYSTERIA2 ||
+                profile.protocol == ProxyProtocol.WIREGUARD ||
+                profile.protocol == ProxyProtocol.TUIC ||
+                profile.protocol == ProxyProtocol.ANYTLS
+            )
+        if (useSingBox) {
             val sbExe = coreLocator.binaryFile("sing-box.exe")
             if (!sbExe.exists()) return ConnectionError.MissingBinary("sing-box.exe", sbExe.absolutePath, "Run scripts/fetch-windows-cores.ps1")
             val cfg = File(store.runtimeDir, "singbox-server.json")
@@ -780,10 +880,14 @@ class WindowsVpnController(
             null
         } else {
             val persisted = store.stateFlow.value
-            val rtt = if (connected.section == ActiveSectionEngine.DNS && persisted.dnsSettings.engineType == DnsEngineType.DNS_CHANGER) {
-                RealDelaySocketProber.measureDnsResolverLatencyMs(persisted.dnsSettings)
-            } else {
-                RealDelaySocketProber.probeHttp204ViaSocks5("127.0.0.1", connected.localSocksPort)
+            val rtt = when {
+                connected.section == ActiveSectionEngine.DNS && persisted.dnsSettings.engineType == DnsEngineType.DNS_CHANGER ->
+                    RealDelaySocketProber.measureDnsResolverLatencyMs(persisted.dnsSettings)
+                connected.section == ActiveSectionEngine.GAMING && persisted.gamingSettings.mode == GamingMode.DNS_ANTI_SANCTION ->
+                    RealDelaySocketProber.measureDnsResolverLatencyMs(
+                        persisted.dnsSettings.copy(mode = DnsTunnelMode.UDP, resolverAddress = persisted.gamingSettings.selectedDnsIp),
+                    )
+                else -> RealDelaySocketProber.probeHttp204ViaSocks5("127.0.0.1", connected.localSocksPort)
             }
             val cur = _tunnelState.value
             if (cur is TunnelState.Connected) {
@@ -1021,6 +1125,8 @@ class WindowsVpnController(
         coreProcess = null
         killProcessTree(secondaryProcess)
         secondaryProcess = null
+        localDesyncServer?.stop()
+        localDesyncServer = null
         spoofServer.stop()
         WindowsSecurityHelper.cleanupTempConfigs(store.runtimeDir, store.mhrDir)
         store.flushState()
@@ -1063,9 +1169,20 @@ class WindowsVpnController(
         }
     }
 
-    private fun resolveEngine(section: ActiveSectionEngine, profile: ProxyProfile?, dns: DnsTunnelSettings): CoreEngine =
+    private fun resolveEngine(
+        section: ActiveSectionEngine,
+        profile: ProxyProfile?,
+        dns: DnsTunnelSettings,
+        gaming: GamingSettings = GamingSettings(),
+    ): CoreEngine =
         when (section) {
             ActiveSectionEngine.AETHER -> CoreEngine.AETHER
+            ActiveSectionEngine.GAMING -> when (gaming.mode) {
+                GamingMode.DNS_ANTI_SANCTION -> CoreEngine.XRAY
+                GamingMode.LOCAL_DPI_DESYNC -> CoreEngine.LOCAL_DESYNC
+                GamingMode.AETHER_UDP_QUIC -> CoreEngine.AETHER
+                GamingMode.CUSTOM_SERVER -> resolveEngine(ActiveSectionEngine.SERVER, profile, dns, gaming)
+            }
             ActiveSectionEngine.MHR -> CoreEngine.MHR
             ActiveSectionEngine.DNS -> when (dns.engineType) {
                 DnsEngineType.AUTO_TUNNEL -> CoreEngine.AETHER
@@ -1074,8 +1191,158 @@ class WindowsVpnController(
             }
             ActiveSectionEngine.SERVER -> when {
                 profile?.rawUri?.trimStart()?.startsWith("{") == true -> CoreEngine.XRAY
-                profile?.protocol == ProxyProtocol.HYSTERIA2 || profile?.protocol == ProxyProtocol.WIREGUARD -> CoreEngine.SING_BOX
+                profile?.protocol == ProxyProtocol.HYSTERIA2 ||
+                    profile?.protocol == ProxyProtocol.WIREGUARD ||
+                    profile?.protocol == ProxyProtocol.TUIC ||
+                    profile?.protocol == ProxyProtocol.ANYTLS -> CoreEngine.SING_BOX
                 else -> CoreEngine.XRAY
             }
         }
+
+    private suspend fun startGamingDns(
+        gaming: GamingSettings,
+        app: AppSettings,
+        coreSocksPort: Int,
+        onLastLine: (String) -> Unit,
+    ): ConnectionError? {
+        val xrayExe = coreLocator.binaryFile("xray.exe")
+        if (!xrayExe.exists()) return ConnectionError.MissingBinary("xray.exe", xrayExe.absolutePath, "Run scripts/fetch-windows-cores.ps1")
+        val hasGeo = coreLocator.ensureGeoAssets(store.geoDir)
+        val innerApp = app.copy(
+            allowLan = false,
+            bypassIranEnabled = gaming.bypassIranGameTraffic,
+        )
+        val dnsStub = DnsTunnelSettings().copy(
+            engineType = DnsEngineType.DNS_CHANGER,
+            mode = DnsTunnelMode.UDP,
+            resolverAddress = gaming.selectedDnsIp.ifBlank { "10.202.10.10" },
+        )
+        val cfg = File(store.runtimeDir, "xray-gaming-dns.json")
+        cfg.writeText(
+            ConfigBuilders.buildDnsChangerXrayConfig(dnsStub, innerApp, coreSocksPort, null, hasGeo, exposeLocalHttpProxy = false),
+            Charsets.UTF_8,
+        )
+        val pb = ProcessBuilder(xrayExe.absolutePath, "run", "-c", cfg.absolutePath)
+            .directory(xrayExe.parentFile)
+            .redirectErrorStream(true)
+        pb.environment()["XRAY_LOCATION_ASSET"] = store.geoDir.absolutePath
+        val proc = pb.start()
+        coreProcess = proc
+        pumpProcessOutput("Gaming-DNS", proc, onLastLine)
+        return awaitSocksReady("Gaming-DNS", proc, coreSocksPort, timeoutMs = 10_000L)
+    }
+
+    private fun startLocalDesync(
+        gaming: GamingSettings,
+        coreSocksPort: Int,
+    ): ConnectionError? {
+        val srv = LocalDpiDesyncServer(
+            listenPort = coreSocksPort,
+            bindHost = "127.0.0.1",
+            fragmentChunkSize = gaming.desyncChunkLen,
+            fragmentDelayMs = 2L,
+            preferCleanDns = gaming.selectedDnsIp.substringBefore(':').ifBlank { "1.1.1.1" },
+            onLog = { msg -> logs.append("DPI-Desync", LogLevel.INFO, msg) },
+        )
+        srv.start()
+        localDesyncServer = srv
+        return if (probeSocks5Greeting("127.0.0.1", coreSocksPort)) {
+            null
+        } else {
+            ConnectionError.HandshakeTimeout("Local DPI Desync failed to bind :$coreSocksPort")
+        }
+    }
+
+    suspend fun scanDnsE2E(
+        extraCsv: String = "",
+        onProgress: ((Int, Int) -> Unit)? = null,
+    ): List<DnsE2EResult> = withContext(Dispatchers.IO) {
+        val results = DnsE2EScanner.scanResolvers(
+            extraIpsCsv = extraCsv,
+            onProgress = onProgress,
+        )
+        val cleanCount = results.count { it.isReachable && !it.isPoisoned }
+        val poisonedCount = results.count { it.isPoisoned }
+        logs.append("DNS-E2E", LogLevel.INFO, "Zero-ICMP Port-53 scan complete: $cleanCount clean, $poisonedCount poisoned (10.10.34.x).")
+        results
+    }
+
+    suspend fun smartAutoConnect(
+        goal: ScenarioGoalId?,
+        onStatus: (String) -> Unit,
+    ) {
+        val arms = SmartConnectOrchestrator.rankedArms(goal, store.stateFlow.value.banditStateJson)
+        val topArms = arms.take(3)
+        for ((index, arm) in topArms.withIndex()) {
+            onStatus("Trying ${arm.titleEn} (${index + 1}/${topArms.size})...")
+            logs.append("SmartConnect", LogLevel.INFO, "Bandit arm [${index + 1}/${topArms.size}]: ${arm.titleEn}")
+            val section = applyStrategyArm(arm)
+            val startTime = System.currentTimeMillis()
+            startConnection(section)
+
+            // Wait up to 28s for Connected or Error
+            var settled = _tunnelState.value
+            val deadline = System.currentTimeMillis() + 28_000L
+            while (System.currentTimeMillis() < deadline && settled is TunnelState.Connecting) {
+                delay(350L)
+                settled = _tunnelState.value
+            }
+            val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(50L)
+            val ok = if (settled is TunnelState.Connected) {
+                val delayMs = refreshActiveRealDelay()
+                delayMs != null || arm == StrategyArm.GAMING_DNS
+            } else {
+                false
+            }
+            val nextJson = SmartConnectOrchestrator.recordOutcome(
+                stateJson = store.stateFlow.value.banditStateJson,
+                arm = arm,
+                success = ok,
+                latencyMs = elapsed,
+            )
+            store.updateBanditState(nextJson)
+            if (ok) {
+                onStatus("Connected via ${arm.titleEn} ✓")
+                return
+            }
+        }
+        onStatus("Smart Auto-Connect tried top strategies without HTTP 204 pass; check logs or switch mode.")
+    }
+
+    private fun applyStrategyArm(arm: StrategyArm): ActiveSectionEngine = when (arm) {
+        StrategyArm.AETHER_MASQUE_H2 -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.DEFAULT) }
+            store.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP2, psiphonEnabled = false, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.AETHER_MASQUE_H3 -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.MASQUE_IN_MASQUE, exitNode = ExitNode.DEFAULT) }
+            store.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP3, quicV2Enabled = true, psiphonEnabled = false, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.AETHER_WG_NOIZE -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.WG_OVER_MASQUE, exitNode = ExitNode.DEFAULT) }
+            store.updateAetherSettings { it.copy(protocol = AetherProtocol.WIREGUARD_OVER_MASQUE, psiphonEnabled = false, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.AETHER_PSIPHON -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.AETHER, activePreset = OneTapPreset.WARP_TO_PSIPHON, exitNode = ExitNode.PSIPHON) }
+            store.updateAetherSettings { it.copy(psiphonEnabled = true, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.LOCAL_DPI_DESYNC -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.GAMING) }
+            store.updateGamingSettings { it.copy(mode = GamingMode.LOCAL_DPI_DESYNC) }
+            ActiveSectionEngine.GAMING
+        }
+        StrategyArm.GAMING_DNS -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.GAMING) }
+            store.updateGamingSettings { it.copy(mode = GamingMode.DNS_ANTI_SANCTION) }
+            ActiveSectionEngine.GAMING
+        }
+        StrategyArm.MHR_RELAY -> {
+            store.updateAppSettings { it.copy(activeSection = ActiveSectionEngine.MHR) }
+            ActiveSectionEngine.MHR
+        }
+    }
 }

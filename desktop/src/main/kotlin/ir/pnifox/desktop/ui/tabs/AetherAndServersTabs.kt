@@ -63,6 +63,7 @@ import ir.pnifox.core.model.ProxyProfile
 import ir.pnifox.core.model.PsiphonChainMode
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.network.ShareLinkParser
+import ir.pnifox.desktop.model.WindowsTunnelMode
 import ir.pnifox.desktop.ui.DesktopBadgePill
 import ir.pnifox.desktop.ui.DesktopCard
 import ir.pnifox.desktop.ui.DesktopConnectButton
@@ -90,10 +91,19 @@ fun AetherDesktopTab(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
+            val showTunHint = state.persisted.windowsTunnelMode == WindowsTunnelMode.SYSTEM_PROXY && !state.persisted.tunPromptDismissed
             DesktopCard {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        DesktopFoxMascot(tunnelState = state.tunnelState, section = ActiveSectionEngine.AETHER)
+                        DesktopFoxMascot(
+                            tunnelState = state.tunnelState,
+                            section = ActiveSectionEngine.AETHER,
+                            onFallbackSystemProxy = { holder.connectViaSystemProxyFallback(ActiveSectionEngine.AETHER) },
+                            onRestartAdmin = { holder.relaunchAsAdmin() },
+                            showTunSuggestion = showTunHint,
+                            onEnableTunMode = { holder.enableTunAndReconnect(ActiveSectionEngine.AETHER) },
+                            onDismissTunSuggestion = { holder.dismissTunSuggestion() },
+                        )
                         Spacer(Modifier.height(10.dp))
                         val endpointText = if (aether.scanForEndpoint || aether.endpointIp.isBlank()) {
                             dtr("Will auto-scan best Cloudflare IP on connect & save it", "در اولین اتصال بهترین IP اسکن و برای دفعات بعد ذخیره می‌شود")
@@ -144,6 +154,10 @@ fun AetherDesktopTab(
                     }
                 }
             }
+        }
+
+        item {
+            ScenarioPresetsDesktopCard(state = state, holder = holder)
         }
 
         item {
@@ -251,7 +265,39 @@ fun AetherDesktopTab(
                     checked = aether.echEnabled,
                     onCheckedChange = { c -> holder.updateAether { it.copy(echEnabled = c) } },
                 )
+                DesktopSwitchRow(
+                    title = dtr("3-Stage Smart ECH Bootstrap (DoH / DoT / Port-53 + Shared CF ECH)", "دریافت هوشمند ECH (DoH/DoT/پورت۵۳ و قرض کلودفلر)"),
+                    subtitle = dtr("Automatically fetches unblocked Cloudflare ECHConfig when UDP 53 ECH lookups are censored.", "اگر استعلام ECH مسدود باشد به صورت خودکار از DoH/DoT یا دامنه‌های باز کلودفلر می‌گیرد."),
+                    checked = aether.smartEchBootstrap,
+                    onCheckedChange = { c -> holder.updateAether { it.copy(smartEchBootstrap = c) } },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = { holder.fetchEchConfigNow() },
+                        enabled = !state.isFetchingEch,
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        if (state.isFetchingEch) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(dtr("Fetch ECH Config Now", "دریافت ECH الان"))
+                    }
+                    if (aether.echBase64Override.isNotBlank()) {
+                        DesktopBadgePill(
+                            text = dtr("ECH Ready ✓", "کلید ECH آماده ✓"),
+                            containerColor = Color(0xFF10B981).copy(alpha = 0.16f),
+                            contentColor = Color(0xFF10B981),
+                        )
+                    }
+                }
             }
+        }
+
+        item {
+            ProtocolGuideDesktopCard()
         }
     }
 }
@@ -277,10 +323,19 @@ fun ServersDesktopTab(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
+            val showTunHint = state.persisted.windowsTunnelMode == WindowsTunnelMode.SYSTEM_PROXY && !state.persisted.tunPromptDismissed
             DesktopCard {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        DesktopFoxMascot(tunnelState = state.tunnelState, section = ActiveSectionEngine.SERVER)
+                        DesktopFoxMascot(
+                            tunnelState = state.tunnelState,
+                            section = ActiveSectionEngine.SERVER,
+                            onFallbackSystemProxy = { holder.connectViaSystemProxyFallback(ActiveSectionEngine.SERVER) },
+                            onRestartAdmin = { holder.relaunchAsAdmin() },
+                            showTunSuggestion = showTunHint,
+                            onEnableTunMode = { holder.enableTunAndReconnect(ActiveSectionEngine.SERVER) },
+                            onDismissTunSuggestion = { holder.dismissTunSuggestion() },
+                        )
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = activeProfile?.let { "${it.name} (${it.address}:${it.port})" }

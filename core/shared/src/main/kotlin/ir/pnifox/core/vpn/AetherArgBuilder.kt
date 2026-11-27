@@ -61,7 +61,7 @@ class AetherArgBuilder @Inject constructor() {
         }
         if (aether.warpApiUseEch) {
             add("--ech")
-            add("auto")
+            add(aether.echBase64Override.trim().ifBlank { "auto" })
             if (aether.echDns.isNotBlank()) {
                 add("--ech-dns")
                 add(aether.echDns.trim())
@@ -288,7 +288,7 @@ class AetherArgBuilder @Inject constructor() {
 
         if (aether.echEnabled) {
             add("--ech")
-            add("auto")
+            add(aether.echBase64Override.trim().ifBlank { "auto" })
             if (aether.echDns.isNotBlank()) {
                 add("--ech-dns")
                 add(aether.echDns.trim())

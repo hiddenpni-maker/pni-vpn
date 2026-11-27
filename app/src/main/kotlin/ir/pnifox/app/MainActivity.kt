@@ -74,11 +74,14 @@ import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Radar
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Storage
+import ir.pnifox.core.model.ActiveSectionEngine
 import ir.pnifox.core.ui.PnifoxTheme
 import ir.pnifox.core.ui.R as UiR
 import ir.pnifox.core.ui.tr
 import ir.pnifox.feature.dns.DnsRoute
+import ir.pnifox.feature.home.GamingRoute
 import ir.pnifox.feature.home.HomeRoute
 import ir.pnifox.feature.scanner.ScannerRoute
 import ir.pnifox.feature.servers.ServersRoute
@@ -94,13 +97,14 @@ private enum class BottomTab(
     val icon: ImageVector,
 ) {
     AETHER("aether", "AETHER", "وارپ", Icons.Rounded.Bolt),
+    GAMING("gaming", "Gaming", "گیم", Icons.Rounded.SportsEsports),
     SERVERS("servers", "Servers", "سرورها", Icons.Rounded.Storage),
     MHR("mhr", "MHR", "MHR", Icons.Rounded.Shield),
     DNS("dns", "DNS", "DNS", Icons.Rounded.Dns),
     SCANNER("scanner", "Scan", "اسکنر", Icons.Rounded.Radar),
-    STATS("stats", "Stats", "آمار", Icons.Rounded.BarChart),
 }
 
+private const val ROUTE_STATS = "stats"
 private const val ROUTE_SETTINGS = "settings"
 
 @AndroidEntryPoint
@@ -148,7 +152,10 @@ class MainActivity : ComponentActivity() {
                 themeMode = appSettings.themeMode,
                 accentColor = appSettings.accentColor,
             ) {
-                PnifoxRootScreen(language = appSettings.language)
+                PnifoxRootScreen(
+                    language = appSettings.language,
+                    onOpenTelegram = { openTelegramAndMarkJoined(appSettings.telegramUrl) },
+                )
 
                 if (showLanguageDialog) {
                     FirstLaunchLanguageDialog(
@@ -259,11 +266,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun PnifoxRootScreen(language: AppLanguage) {
+private fun PnifoxRootScreen(
+    language: AppLanguage,
+    onOpenTelegram: () -> Unit,
+) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = currentRoute != ROUTE_SETTINGS
+    val showBottomBar = currentRoute != ROUTE_SETTINGS && currentRoute != ROUTE_STATS
 
     val navigateToTab: (String) -> Unit = { route ->
         navController.navigate(route) {
@@ -273,6 +283,17 @@ private fun PnifoxRootScreen(language: AppLanguage) {
             launchSingleTop = true
             restoreState = true
         }
+    }
+
+    val navigateBySection: (ActiveSectionEngine) -> Unit = { sec ->
+        val dest = when (sec) {
+            ActiveSectionEngine.AETHER -> BottomTab.AETHER.route
+            ActiveSectionEngine.GAMING -> BottomTab.GAMING.route
+            ActiveSectionEngine.SERVER -> BottomTab.SERVERS.route
+            ActiveSectionEngine.MHR -> BottomTab.MHR.route
+            ActiveSectionEngine.DNS -> BottomTab.DNS.route
+        }
+        navigateToTab(dest)
     }
 
     Scaffold(
@@ -311,6 +332,17 @@ private fun PnifoxRootScreen(language: AppLanguage) {
                     onNavigateScanner = { navigateToTab(BottomTab.SCANNER.route) },
                     onNavigateDns = { navigateToTab(BottomTab.DNS.route) },
                     onNavigateSettings = { navController.navigate(ROUTE_SETTINGS) },
+                    onNavigateStats = { navController.navigate(ROUTE_STATS) },
+                    onNavigateSection = navigateBySection,
+                    onOpenTelegram = onOpenTelegram,
+                )
+            }
+            composable(BottomTab.GAMING.route) {
+                GamingRoute(
+                    onNavigateSection = navigateBySection,
+                    onNavigateServers = { navigateToTab(BottomTab.SERVERS.route) },
+                    onNavigateSettings = { navController.navigate(ROUTE_SETTINGS) },
+                    onOpenTelegram = onOpenTelegram,
                 )
             }
             composable(BottomTab.SERVERS.route) {
@@ -328,7 +360,7 @@ private fun PnifoxRootScreen(language: AppLanguage) {
             composable(BottomTab.DNS.route) {
                 DnsRoute(onNavigateScanner = { navigateToTab(BottomTab.SCANNER.route) })
             }
-            composable(BottomTab.STATS.route) {
+            composable(ROUTE_STATS) {
                 StatsRoute()
             }
             composable(ROUTE_SETTINGS) {

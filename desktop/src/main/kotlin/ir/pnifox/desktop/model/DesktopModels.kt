@@ -3,8 +3,10 @@ package ir.pnifox.desktop.model
 import ir.pnifox.core.model.AetherSettings
 import ir.pnifox.core.model.AppSettings
 import ir.pnifox.core.model.DnsTunnelSettings
+import ir.pnifox.core.model.GamingSettings
 import ir.pnifox.core.model.MhrSettings
 import ir.pnifox.core.model.ProxyProfile
+import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.SubscriptionGroup
 import ir.pnifox.core.model.WarpKey
 import kotlinx.serialization.Serializable
@@ -36,6 +38,7 @@ enum class DesktopTab(
     val labelFa: String,
 ) {
     AETHER("AETHER (WARP)", "موتور AETHER"),
+    GAMING("Gaming & Presets", "گیم و حالت‌ها"),
     SERVERS("Servers", "سرورها"),
     MHR("MHR Relay", "رله MHR"),
     DNS("DNS Tunnel", "تونل DNS"),
@@ -47,9 +50,13 @@ enum class DesktopTab(
 data class DesktopPersistedState(
     val appSettings: AppSettings = AppSettings(),
     val aetherSettings: AetherSettings = AetherSettings(),
+    val gamingSettings: GamingSettings = GamingSettings(),
     val dnsSettings: DnsTunnelSettings = DnsTunnelSettings(),
     val mhrSettings: MhrSettings = MhrSettings(),
     val windowsTunnelMode: WindowsTunnelMode = WindowsTunnelMode.SYSTEM_PROXY,
+    val selectedScenarioId: ScenarioGoalId? = null,
+    val banditStateJson: String = "",
+    val tunPromptDismissed: Boolean = false,
     val profiles: List<ProxyProfile> = emptyList(),
     val subscriptions: List<SubscriptionGroup> = emptyList(),
     val warpKeys: List<WarpKey> = emptyList(),

@@ -11,6 +11,7 @@ export GOBIN="$PWD/.bin"
 export PATH="$GOBIN:${JAVA_HOME:+$JAVA_HOME/bin:}$PATH"
 export ANDROID_HOME="$SDK"
 export ANDROID_NDK_HOME="$NDK"
+export CGO_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 ${CGO_LDFLAGS:-}"
 
 go mod tidy
 go test ./...

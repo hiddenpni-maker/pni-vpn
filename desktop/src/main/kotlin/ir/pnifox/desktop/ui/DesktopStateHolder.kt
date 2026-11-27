@@ -7,20 +7,27 @@ import ir.pnifox.core.model.AppLanguage
 import ir.pnifox.core.model.AppSettings
 import ir.pnifox.core.model.AppUpdateInfo
 import ir.pnifox.core.model.DnsTunnelSettings
+import ir.pnifox.core.model.ExitNode
+import ir.pnifox.core.model.GamingSettings
 import ir.pnifox.core.model.LogEntry
 import ir.pnifox.core.model.LogLevel
+import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.MhrDefaultSniPool
 import ir.pnifox.core.model.MhrMode
 import ir.pnifox.core.model.MhrSettings
 import ir.pnifox.core.model.MhrSniTestResult
 import ir.pnifox.core.model.ProxyProfile
 import ir.pnifox.core.model.ProxyProtocol
+import ir.pnifox.core.model.ScenarioGoalId
+import ir.pnifox.core.model.ScenarioProfile
 import ir.pnifox.core.model.SubscriptionGroup
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.model.UpdateCheckState
 import ir.pnifox.core.network.AppUpdateChecker
 import ir.pnifox.core.network.MhrShareCodec
 import ir.pnifox.core.network.ShareLinkParser
+import ir.pnifox.core.vpn.DnsE2EResult
+import ir.pnifox.core.vpn.EchBootstrapResolver
 import ir.pnifox.core.vpn.JvmScanCandidateResult
 import ir.pnifox.core.vpn.JvmScanProgress
 import ir.pnifox.core.vpn.LanNetworkHelper
@@ -80,6 +87,14 @@ data class DesktopUiState(
     val lanIps: List<String> = emptyList(),
     val updateState: UpdateCheckState = UpdateCheckState.Idle,
     val startupUpdateModal: AppUpdateInfo? = null,
+    val dnsE2eResults: List<DnsE2EResult> = emptyList(),
+    val isScanningDnsE2e: Boolean = false,
+    val dnsE2eProgressText: String = "",
+    val gamingPingResults: Map<String, Int?> = emptyMap(),
+    val isTestingGamingPings: Boolean = false,
+    val isFetchingEch: Boolean = false,
+    val isSmartConnecting: Boolean = false,
+    val smartConnectStatus: String = "",
     val appVersion: String = "2.1.0",
 )
 
@@ -103,6 +118,14 @@ private data class RuntimeUiFlags(
     val lanIps: List<String> = emptyList(),
     val updateState: UpdateCheckState = UpdateCheckState.Idle,
     val startupUpdateModal: AppUpdateInfo? = null,
+    val dnsE2eResults: List<DnsE2EResult> = emptyList(),
+    val isScanningDnsE2e: Boolean = false,
+    val dnsE2eProgressText: String = "",
+    val gamingPingResults: Map<String, Int?> = emptyMap(),
+    val isTestingGamingPings: Boolean = false,
+    val isFetchingEch: Boolean = false,
+    val isSmartConnecting: Boolean = false,
+    val smartConnectStatus: String = "",
 )
 
 class DesktopStateHolder {
@@ -179,6 +202,14 @@ class DesktopStateHolder {
             lanIps = f.lanIps,
             updateState = f.updateState,
             startupUpdateModal = f.startupUpdateModal,
+            dnsE2eResults = f.dnsE2eResults,
+            isScanningDnsE2e = f.isScanningDnsE2e,
+            dnsE2eProgressText = f.dnsE2eProgressText,
+            gamingPingResults = f.gamingPingResults,
+            isTestingGamingPings = f.isTestingGamingPings,
+            isFetchingEch = f.isFetchingEch,
+            isSmartConnecting = f.isSmartConnecting,
+            smartConnectStatus = f.smartConnectStatus,
         )
     }.stateIn(scope, SharingStarted.Eagerly, DesktopUiState())
 
@@ -212,7 +243,147 @@ class DesktopStateHolder {
     fun updateAether(transform: (AetherSettings) -> AetherSettings) = store.updateAetherSettings(transform)
     fun updateDns(transform: (DnsTunnelSettings) -> DnsTunnelSettings) = store.updateDnsSettings(transform)
     fun updateMhr(transform: (MhrSettings) -> MhrSettings) = store.updateMhrSettings(transform)
+    fun updateGaming(transform: (GamingSettings) -> GamingSettings) = store.updateGamingSettings(transform)
     fun setWindowsTunnelMode(mode: WindowsTunnelMode) = store.setWindowsTunnelMode(mode)
+
+    fun switchWindowsTunnelModeQuick(mode: WindowsTunnelMode) {
+        if (mode == WindowsTunnelMode.TUN_WINTUN && !controller.isAdmin.value) {
+            store.setWindowsTunnelMode(mode)
+            relaunchAsAdmin()
+            return
+        }
+        val wasConnected = controller.tunnelState.value is TunnelState.Connected
+        store.setWindowsTunnelMode(mode)
+        if (wasConnected) {
+            scope.launch { controller.reconnectActive() }
+        }
+    }
+
+    fun connectViaSystemProxyFallback(section: ActiveSectionEngine) {
+        store.setWindowsTunnelMode(WindowsTunnelMode.SYSTEM_PROXY)
+        scope.launch { controller.startConnection(section) }
+    }
+
+    fun enableTunAndReconnect(section: ActiveSectionEngine) {
+        store.setWindowsTunnelMode(WindowsTunnelMode.TUN_WINTUN)
+        if (!controller.isAdmin.value) {
+            relaunchAsAdmin()
+        } else {
+            scope.launch { controller.reconnectActive() }
+        }
+    }
+
+    fun dismissTunSuggestion() {
+        store.setTunPromptDismissed(true)
+    }
+
+    fun applyScenario(profile: ScenarioProfile, autoConnect: Boolean) {
+        store.setSelectedScenario(profile.id)
+        store.updateAppSettings {
+            it.copy(
+                activeSection = profile.recommendedSection,
+                activePreset = profile.recommendedAetherPreset,
+                exitNode = if (profile.recommendedPsiphon) ExitNode.PSIPHON else ExitNode.DEFAULT,
+            )
+        }
+        store.updateAetherSettings {
+            it.copy(
+                protocol = profile.recommendedAetherProtocol,
+                masqueTransport = if (profile.recommendedQuicV2) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
+                psiphonEnabled = profile.recommendedPsiphon,
+                torEnabled = false,
+                noizeProfile = profile.recommendedNoiseProfile,
+                echEnabled = profile.recommendedEch,
+                quicV2Enabled = profile.recommendedQuicV2,
+            )
+        }
+        store.updateGamingSettings {
+            it.copy(mode = profile.recommendedGamingMode, preferQuicV2H3 = profile.recommendedQuicV2)
+        }
+        store.updateDnsSettings {
+            it.copy(engineType = profile.recommendedDnsEngine)
+        }
+        val targetTab = when (profile.recommendedSection) {
+            ActiveSectionEngine.AETHER -> DesktopTab.AETHER
+            ActiveSectionEngine.GAMING -> DesktopTab.GAMING
+            ActiveSectionEngine.SERVER -> DesktopTab.SERVERS
+            ActiveSectionEngine.MHR -> DesktopTab.MHR
+            ActiveSectionEngine.DNS -> DesktopTab.DNS
+        }
+        selectTab(targetTab)
+        val tunTip = if (profile.preferTunOnDesktop && store.stateFlow.value.windowsTunnelMode == WindowsTunnelMode.SYSTEM_PROXY) {
+            " (Tip: Enable TUN Mode for PC games / non-proxy apps)"
+        } else {
+            ""
+        }
+        setBanner("Scenario '${profile.id.titleEn}' applied.$tunTip")
+        if (autoConnect) {
+            scope.launch { controller.startConnection(profile.recommendedSection) }
+        }
+    }
+
+    fun runDnsE2EScan(extraCsv: String = "") {
+        if (flags.value.isScanningDnsE2e) return
+        scope.launch {
+            flags.value = flags.value.copy(isScanningDnsE2e = true, dnsE2eProgressText = "Scanning Port-53 resolvers (No ICMP)...")
+            val results = controller.scanDnsE2E(extraCsv) { done, total ->
+                flags.value = flags.value.copy(dnsE2eProgressText = "Scanned $done/$total resolvers (UDP Port 53)...")
+            }
+            val clean = results.count { it.isReachable && !it.isPoisoned }
+            val poisoned = results.count { it.isPoisoned }
+            flags.value = flags.value.copy(
+                isScanningDnsE2e = false,
+                dnsE2eResults = results,
+                dnsE2eProgressText = "Done: $clean clean, $poisoned poisoned (10.10.34.x)",
+            )
+        }
+    }
+
+    fun testGamingPings() {
+        if (flags.value.isTestingGamingPings) return
+        scope.launch {
+            flags.value = flags.value.copy(isTestingGamingPings = true)
+            val targets = listOf("10.202.10.10", "185.55.226.26", "10.202.10.202", "178.22.122.100", "78.157.42.100", "1.1.1.1", "9.9.9.10")
+            val results = ir.pnifox.core.vpn.DnsE2EScanner.scanResolvers(
+                extraIpsCsv = targets.joinToString(","),
+                probeDomain = "google.com",
+            ).associate { res ->
+                res.ip to if (res.isReachable && !res.isPoisoned) res.latencyMs.toInt() else null
+            }
+            flags.value = flags.value.copy(isTestingGamingPings = false, gamingPingResults = results)
+        }
+    }
+
+    fun fetchEchConfigNow(domain: String = "cloudflare-ech.com") {
+        if (flags.value.isFetchingEch) return
+        scope.launch {
+            flags.value = flags.value.copy(isFetchingEch = true)
+            val echDns = store.stateFlow.value.aetherSettings.echDns
+            val res = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                EchBootstrapResolver.resolveEchConfig(domain, echDns) { msg ->
+                    logs.append("ECH", LogLevel.INFO, msg)
+                }
+            }
+            if (res != null) {
+                store.updateAetherSettings { it.copy(echEnabled = true, echBase64Override = res.echConfigBase64) }
+                setBanner("Smart ECH Bootstrap succeeded via ${res.sourceLabel} (${res.resolvedDomain})")
+            } else {
+                setBanner("ECH Bootstrap could not reach DoH/DoT/UDP 53; Aether will use --ech auto.")
+            }
+            flags.value = flags.value.copy(isFetchingEch = false)
+        }
+    }
+
+    fun smartAutoConnect(goal: ScenarioGoalId? = null) {
+        if (flags.value.isSmartConnecting) return
+        scope.launch {
+            flags.value = flags.value.copy(isSmartConnecting = true, smartConnectStatus = "Evaluating best routes...")
+            controller.smartAutoConnect(goal) { st ->
+                flags.value = flags.value.copy(smartConnectStatus = st)
+            }
+            flags.value = flags.value.copy(isSmartConnecting = false)
+        }
+    }
 
     fun toggleConnect(section: ActiveSectionEngine) {
         scope.launch { controller.connectOrToggle(section) }

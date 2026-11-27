@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -111,6 +113,9 @@ fun HomeRoute(
     onNavigateScanner: () -> Unit,
     onNavigateDns: () -> Unit,
     onNavigateSettings: () -> Unit,
+    onNavigateStats: () -> Unit = {},
+    onNavigateSection: (ActiveSectionEngine) -> Unit = {},
+    onOpenTelegram: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -121,6 +126,7 @@ fun HomeRoute(
     var showRegionPicker by remember { mutableStateOf(false) }
     var showGuideSheet by remember { mutableStateOf(false) }
     var showRulesetsSheet by remember { mutableStateOf(false) }
+    var showProtocolGuide by remember { mutableStateOf(false) }
     var expandStep1Api by remember { mutableStateOf(false) }
     var expandStep3Advanced by remember { mutableStateOf(false) }
 
@@ -166,6 +172,8 @@ fun HomeRoute(
                 AetherTopBar(
                     connectionMode = state.appSettings.connectionMode,
                     onSelectMode = viewModel::setConnectionMode,
+                    onOpenTelegram = onOpenTelegram,
+                    onOpenStats = onNavigateStats,
                     onOpenGuide = { showGuideSheet = true },
                     onOpenLogs = { showLogsSheet = true },
                     onOpenSettings = onNavigateSettings,
@@ -359,6 +367,21 @@ fun HomeRoute(
                     onCopy = { clipboard.setText(AnnotatedString(viewModel.exportLogs())) },
                     onExpandAll = { showLogsSheet = true },
                     cardPadding = metrics.cardPadding,
+                )
+            }
+
+            // Goal-Based Scenarios + Smart Auto-Connect + Protocol Comparison
+            item {
+                ScenarioPresetsCard(
+                    selectedScenario = state.selectedScenario,
+                    isSmartConnecting = state.isSmartConnecting,
+                    smartConnectStatus = state.smartConnectStatus,
+                    cardPadding = metrics.cardPadding,
+                    onApplyScenario = { profile, connect ->
+                        viewModel.applyScenario(profile, connect, onNavigateSection)
+                    },
+                    onSmartAutoConnect = viewModel::smartAutoConnect,
+                    onOpenProtocolGuide = { showProtocolGuide = true },
                 )
             }
 
@@ -712,6 +735,27 @@ fun HomeRoute(
                                 )
                             }
                             PnifoxSwitchRow(
+                                title = tr("3-Stage Smart ECH Bootstrap (DoH/DoT/53)", "دریافت هوشمند ECH (DoH/DoT/پورت۵۳)"),
+                                checked = state.aetherSettings.smartEchBootstrap,
+                                onCheckedChange = { c -> viewModel.updateAether { it.copy(smartEchBootstrap = c) } },
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedButton(
+                                    onClick = viewModel::fetchEchConfigNow,
+                                    enabled = !state.isFetchingEch,
+                                    shape = RoundedCornerShape(10.dp),
+                                ) {
+                                    Text(if (state.isFetchingEch) tr("Fetching...", "دریافت...") else tr("Fetch ECH Now", "دریافت ECH الان"))
+                                }
+                                if (state.aetherSettings.echBase64Override.isNotBlank()) {
+                                    PnifoxBadgePill(
+                                        text = tr("ECH Ready ✓", "کلید ECH آماده ✓"),
+                                        containerColor = Color(0xFF10B981).copy(alpha = 0.16f),
+                                        contentColor = Color(0xFF10B981),
+                                    )
+                                }
+                            }
+                            PnifoxSwitchRow(
                                 title = "Psiphon Exit Chain (--psiphon)",
                                 checked = state.aetherSettings.psiphonEnabled,
                                 onCheckedChange = { c -> viewModel.updateAether { it.copy(psiphonEnabled = c) } },
@@ -808,12 +852,20 @@ fun HomeRoute(
             onDismiss = { showGuideSheet = false },
         )
     }
+
+    if (showProtocolGuide) {
+        ProtocolGuideDialog(
+            onDismiss = { showProtocolGuide = false },
+        )
+    }
 }
 
 @Composable
 private fun AetherTopBar(
     connectionMode: ConnectionMode,
     onSelectMode: (ConnectionMode) -> Unit,
+    onOpenTelegram: () -> Unit,
+    onOpenStats: () -> Unit,
     onOpenGuide: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -825,11 +877,11 @@ private fun AetherTopBar(
         Image(
             painter = painterResource(UiR.drawable.pnifox_makima_logo),
             contentDescription = "pnifox",
-            modifier = Modifier.size(36.dp).clip(CircleShape),
+            modifier = Modifier.size(34.dp).clip(CircleShape),
         )
-        Spacer(Modifier.width(8.dp))
-        Text("pnifox", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(6.dp))
+        Text("pnifox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(5.dp))
         Box {
             Surface(
                 shape = RoundedCornerShape(999.dp),
@@ -837,9 +889,9 @@ private fun AetherTopBar(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier.clickable { expanded = true },
             ) {
-                Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(if (isFa) connectionMode.labelFa else connectionMode.labelEn, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                    Icon(Icons.Rounded.KeyboardArrowDown, null, modifier = Modifier.size(15.dp))
+                    Icon(Icons.Rounded.KeyboardArrowDown, null, modifier = Modifier.size(14.dp))
                 }
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -852,14 +904,29 @@ private fun AetherTopBar(
             }
         }
         Spacer(Modifier.weight(1f))
-        IconButton(onClick = onOpenGuide, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = "Usage Guide")
+        Surface(
+            shape = RoundedCornerShape(999.dp),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+            modifier = Modifier.clickable(onClick = onOpenTelegram),
+        ) {
+            Row(modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Telegram", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(13.dp))
+                Spacer(Modifier.width(3.dp))
+                Text(tr("TG", "تلگرام"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
         }
-        IconButton(onClick = onOpenLogs, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Rounded.Code, contentDescription = "Logs")
+        IconButton(onClick = onOpenStats, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Rounded.BarChart, contentDescription = "Stats", modifier = Modifier.size(19.dp))
         }
-        IconButton(onClick = onOpenSettings, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Rounded.Settings, contentDescription = "Settings")
+        IconButton(onClick = onOpenGuide, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = "Usage Guide", modifier = Modifier.size(19.dp))
+        }
+        IconButton(onClick = onOpenLogs, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Rounded.Code, contentDescription = "Logs", modifier = Modifier.size(19.dp))
+        }
+        IconButton(onClick = onOpenSettings, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Rounded.Settings, contentDescription = "Settings", modifier = Modifier.size(19.dp))
         }
     }
 }

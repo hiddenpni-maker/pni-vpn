@@ -24,6 +24,9 @@ import ir.pnifox.core.model.ConnectionError
 import ir.pnifox.core.model.CoreEngine
 import ir.pnifox.core.model.DnsEngineType
 import ir.pnifox.core.model.DnsInnerProtocol
+import ir.pnifox.core.model.DnsTunnelMode
+import ir.pnifox.core.model.DnsTunnelSettings
+import ir.pnifox.core.model.GamingMode
 import ir.pnifox.core.model.PnifoxRegionsCatalog
 import ir.pnifox.core.model.TrafficFormatters
 import ir.pnifox.core.model.TunnelState
@@ -135,11 +138,12 @@ class PniVpnService : VpnService() {
             val aetherSettings = preferencesRepo.aetherSettingsFlow.first()
             val dnsSettings = preferencesRepo.dnsSettingsFlow.first()
             val mhrSettings = preferencesRepo.mhrSettingsFlow.first()
+            val gamingSettings = preferencesRepo.gamingSettingsFlow.first()
             val section = requestedSection ?: appSettings.activeSection
             val profile = appSettings.activeProfileId?.let { dataRepo.getProfile(it) }
             notifIsFa = appSettings.language == AppLanguage.PERSIAN
 
-            val missing = binaryRegistry.verifyRequiredBinaries(section, appSettings, aetherSettings, profile, dnsSettings)
+            val missing = binaryRegistry.verifyRequiredBinaries(section, appSettings, aetherSettings, profile, dnsSettings, gamingSettings)
             if (missing != null) {
                 logs.append("VpnService", LogLevel.ERROR, "Missing binary: ${missing.expectedAbiPath}")
                 vpnStateHolder.updateState(TunnelState.Error(section, missing))
@@ -147,7 +151,9 @@ class PniVpnService : VpnService() {
                 return@launch
             }
 
-            if (section == ActiveSectionEngine.SERVER && profile == null) {
+            if ((section == ActiveSectionEngine.SERVER || (section == ActiveSectionEngine.GAMING && gamingSettings.mode == GamingMode.CUSTOM_SERVER)) &&
+                profile == null
+            ) {
                 vpnStateHolder.updateState(
                     TunnelState.Error(
                         section,
@@ -193,10 +199,20 @@ class PniVpnService : VpnService() {
                 }
             }
 
+            processManager.activeSocketProtector = { sock -> protect(sock) }
+            processManager.activeDatagramProtector = { sock -> protect(sock) }
             val coreErr = when (section) {
                 ActiveSectionEngine.AETHER -> processManager.startAetherDaemon(
                     appSettings = appSettings,
                     aether = aetherSettings,
+                    onStageUpdate = onStageUpdate,
+                    onEndpointDiscovered = onEndpointDiscovered,
+                )
+                ActiveSectionEngine.GAMING -> processManager.startGamingDaemon(
+                    gaming = gamingSettings,
+                    appSettings = appSettings,
+                    aetherSettings = aetherSettings,
+                    activeProfile = profile,
                     onStageUpdate = onStageUpdate,
                     onEndpointDiscovered = onEndpointDiscovered,
                 )
@@ -217,7 +233,8 @@ class PniVpnService : VpnService() {
             }
 
             // 2. Establish Android TUN and route through libhev-socks5-tunnel.so -> 127.0.0.1:10820
-            val isDnsChangerOnly = section == ActiveSectionEngine.DNS && dnsSettings.engineType == DnsEngineType.DNS_CHANGER
+            val isDnsChangerOnly = (section == ActiveSectionEngine.DNS && dnsSettings.engineType == DnsEngineType.DNS_CHANGER) ||
+                (section == ActiveSectionEngine.GAMING && gamingSettings.mode == GamingMode.DNS_ANTI_SANCTION)
             val useMapDns = !isDnsChangerOnly && (
                 appSettings.fakeDnsEnabled ||
                     section == ActiveSectionEngine.DNS ||
@@ -272,7 +289,7 @@ class PniVpnService : VpnService() {
             }
             logs.append("TProxy", LogLevel.INFO, "hev-socks5-tunnel started (fd=${pfd.fd}, dns=$tunDns, mapdns=$useMapDns, udp=$enableUdp)")
 
-            val engine = binaryRegistry.resolveEngineForSection(section, appSettings, aetherSettings, profile, dnsSettings)
+            val engine = binaryRegistry.resolveEngineForSection(section, appSettings, aetherSettings, profile, dnsSettings, gamingSettings)
             val resolvedAetherIp = discoveredEndpointIp ?: aetherSettings.endpointIp
             val resolvedAetherPort = discoveredEndpointPort ?: aetherSettings.endpointPort
             val endpointLabel = when (section) {
@@ -280,6 +297,12 @@ class PniVpnService : VpnService() {
                     "$resolvedAetherIp:$resolvedAetherPort"
                 } else {
                     "Auto-Scanned WARP"
+                }
+                ActiveSectionEngine.GAMING -> when (gamingSettings.mode) {
+                    GamingMode.DNS_ANTI_SANCTION -> "Game DNS • ${gamingSettings.selectedDnsIp}"
+                    GamingMode.LOCAL_DPI_DESYNC -> "Local DPI Desync (0-Server)"
+                    GamingMode.AETHER_UDP_QUIC -> "Game WARP • ${discoveredEndpointIp ?: resolvedAetherIp}"
+                    GamingMode.CUSTOM_SERVER -> "Game Server • ${profile?.name ?: "-"}"
                 }
                 ActiveSectionEngine.SERVER -> "${profile!!.address}:${profile.port}"
                 ActiveSectionEngine.DNS -> when (dnsSettings.engineType) {
@@ -322,10 +345,16 @@ class PniVpnService : VpnService() {
             // Probe real end-to-end delay shortly after tunnel becomes active
             serviceScope.launch {
                 delay(1100L)
+                val probeDnsSettings = when {
+                    section == ActiveSectionEngine.DNS -> dnsSettings
+                    section == ActiveSectionEngine.GAMING && gamingSettings.mode == GamingMode.DNS_ANTI_SANCTION ->
+                        DnsTunnelSettings().copy(mode = DnsTunnelMode.UDP, resolverAddress = gamingSettings.selectedDnsIp)
+                    else -> null
+                }
                 val measured = realDelayProber.measureActiveTunnelDelayMs(
                     engine = engine,
                     localSocksPort = aetherSettings.localSocksPort,
-                    dnsSettings = if (section == ActiveSectionEngine.DNS) dnsSettings else null,
+                    dnsSettings = probeDnsSettings,
                 )
                 if (measured != null) {
                     notifLatestPingMs = measured

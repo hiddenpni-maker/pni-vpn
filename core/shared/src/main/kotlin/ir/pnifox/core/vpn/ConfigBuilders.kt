@@ -473,7 +473,8 @@ object ConfigBuilders {
     }
 
     private fun buildStreamSettings(profile: ProxyProfile, useFragment: Boolean): JsonObject = buildJsonObject {
-        val net = profile.transport.lowercase().ifBlank { "tcp" }
+        val rawNet = profile.transport.lowercase().ifBlank { "tcp" }
+        val net = if (rawNet == "splithttp") "xhttp" else rawNet
         put("network", net)
         if (profile.realityPublicKey.isNotBlank()) {
             put("security", "reality")
@@ -500,6 +501,11 @@ object ConfigBuilders {
             }
             "grpc" -> putJsonObject("grpcSettings") {
                 put("serviceName", profile.pathOrServiceName)
+            }
+            "xhttp" -> putJsonObject("xhttpSettings") {
+                put("path", profile.pathOrServiceName.ifBlank { "/" })
+                if (profile.sni.isNotBlank()) put("host", profile.sni)
+                put("mode", "auto")
             }
         }
         if (useFragment) {
@@ -650,6 +656,46 @@ object ConfigBuilders {
                 putJsonObject("tls") {
                     put("enabled", true)
                     put("server_name", profile.sni.ifBlank { profile.address })
+                }
+            }
+            ProxyProtocol.TUIC -> {
+                val uuid = profile.secret.substringBefore(':').trim()
+                val pwd = profile.secret.substringAfter(':', "").trim()
+                buildJsonObject {
+                    put("type", "tuic")
+                    put("tag", "proxy")
+                    put("server", profile.address)
+                    put("server_port", profile.port)
+                    put("uuid", uuid)
+                    if (pwd.isNotEmpty()) put("password", pwd)
+                    put("congestion_control", "bbr")
+                    putJsonObject("tls") {
+                        put("enabled", true)
+                        put("server_name", profile.sni.ifBlank { profile.address })
+                    }
+                }
+            }
+            ProxyProtocol.ANYTLS -> buildJsonObject {
+                put("type", "anytls")
+                put("tag", "proxy")
+                put("server", profile.address)
+                put("server_port", profile.port)
+                put("password", profile.secret)
+                putJsonObject("tls") {
+                    put("enabled", true)
+                    put("server_name", profile.sni.ifBlank { profile.address })
+                }
+            }
+            ProxyProtocol.SHADOWSOCKS -> {
+                val method = profile.secret.substringBefore(':', "2022-blake3-aes-128-gcm")
+                val pwd = profile.secret.substringAfter(':', profile.secret)
+                buildJsonObject {
+                    put("type", "shadowsocks")
+                    put("tag", "proxy")
+                    put("server", profile.address)
+                    put("server_port", profile.port)
+                    put("method", method)
+                    put("password", pwd)
                 }
             }
             else -> buildJsonObject {

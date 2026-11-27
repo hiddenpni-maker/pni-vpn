@@ -37,15 +37,19 @@ import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import ir.pnifox.core.model.ConnectionError
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -317,10 +321,17 @@ fun DesktopConnectButton(
 fun DesktopFoxMascot(
     tunnelState: TunnelState,
     section: ActiveSectionEngine,
+    onFallbackSystemProxy: (() -> Unit)? = null,
+    onRestartAdmin: (() -> Unit)? = null,
+    showTunSuggestion: Boolean = false,
+    onEnableTunMode: (() -> Unit)? = null,
+    onDismissTunSuggestion: (() -> Unit)? = null,
 ) {
     val isConnecting = tunnelState is TunnelState.Connecting && tunnelState.section == section
     val isConnected = tunnelState is TunnelState.Connected && tunnelState.section == section
-    val isError = tunnelState is TunnelState.Error && tunnelState.section == section
+    val errState = (tunnelState as? TunnelState.Error)?.takeIf { it.section == section }
+    val isError = errState != null
+    val isPermissionDenied = errState?.error is ConnectionError.PermissionDenied
 
     val transition = rememberInfiniteTransition(label = "desktop_fox")
     val runPhase by transition.animateFloat(
@@ -344,81 +355,152 @@ fun DesktopFoxMascot(
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = badgeBg,
-            modifier = Modifier.size(62.dp),
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize().padding(6.dp)) {
-                val w = this.size.width
-                val h = this.size.height
-                val bob = if (isConnecting) sin(runPhase) * 2.5f else -breathe * 1.6f
-                val legSwing = if (isConnecting) sin(runPhase) * (w * 0.12f) else 0f
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = badgeBg,
+                modifier = Modifier.size(62.dp),
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize().padding(6.dp)) {
+                    val w = this.size.width
+                    val h = this.size.height
+                    val bob = if (isConnecting) sin(runPhase) * 2.5f else -breathe * 1.6f
+                    val legSwing = if (isConnecting) sin(runPhase) * (w * 0.12f) else 0f
 
-                if (isConnecting) {
+                    if (isConnecting) {
+                        drawLine(
+                            Color(0xFF94A3B8).copy(alpha = 0.45f),
+                            Offset(w * 0.05f, h * 0.4f),
+                            Offset(w * 0.24f, h * 0.4f),
+                            strokeWidth = 2f,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+
+                    // Tail
                     drawLine(
-                        Color(0xFF94A3B8).copy(alpha = 0.45f),
-                        Offset(w * 0.05f, h * 0.4f),
-                        Offset(w * 0.24f, h * 0.4f),
-                        strokeWidth = 2f,
+                        color = foxOrange,
+                        start = Offset(w * 0.3f, h * 0.68f + bob),
+                        end = Offset(w * 0.1f, h * 0.56f + bob),
+                        strokeWidth = w * 0.12f,
                         cap = StrokeCap.Round,
                     )
+                    // Body
+                    drawRoundRect(
+                        color = foxOrange,
+                        topLeft = Offset(w * 0.28f, h * 0.52f + bob),
+                        size = Size(w * 0.42f, h * 0.24f),
+                        cornerRadius = CornerRadius(8f, 8f),
+                    )
+                    // Legs
+                    drawLine(Color(0xFF1E293B), Offset(w * 0.36f, h * 0.74f + bob), Offset(w * 0.34f - legSwing, h * 0.90f), strokeWidth = 3f, cap = StrokeCap.Round)
+                    drawLine(Color(0xFF1E293B), Offset(w * 0.60f, h * 0.74f + bob), Offset(w * 0.62f + legSwing, h * 0.90f), strokeWidth = 3f, cap = StrokeCap.Round)
+                    // Head
+                    val hx = w * 0.72f
+                    val hy = h * 0.43f + bob
+                    drawCircle(color = foxOrange, radius = w * 0.17f, center = Offset(hx, hy))
+                    drawFoxEar(Offset(hx - w * 0.10f, hy - w * 0.10f), w * 0.13f, foxOrange)
+                    drawFoxEar(Offset(hx + w * 0.04f, hy - w * 0.12f), w * 0.13f, foxOrange)
+                    // Eye
+                    val eyeColor = if (isError) Color(0xFFEF4444) else Color(0xFF0F172A)
+                    drawCircle(color = eyeColor, radius = 2.6f, center = Offset(hx + w * 0.06f, hy - 1.5f))
+                    if (isConnected) {
+                        drawCircle(color = Color(0xFF10B981), radius = 4f, center = Offset(w * 0.88f, h * 0.2f))
+                    }
                 }
-
-                // Tail
-                drawLine(
-                    color = foxOrange,
-                    start = Offset(w * 0.3f, h * 0.68f + bob),
-                    end = Offset(w * 0.1f, h * 0.56f + bob),
-                    strokeWidth = w * 0.12f,
-                    cap = StrokeCap.Round,
-                )
-                // Body
-                drawRoundRect(
-                    color = foxOrange,
-                    topLeft = Offset(w * 0.28f, h * 0.52f + bob),
-                    size = Size(w * 0.42f, h * 0.24f),
-                    cornerRadius = CornerRadius(8f, 8f),
-                )
-                // Legs
-                drawLine(Color(0xFF1E293B), Offset(w * 0.36f, h * 0.74f + bob), Offset(w * 0.34f - legSwing, h * 0.90f), strokeWidth = 3f, cap = StrokeCap.Round)
-                drawLine(Color(0xFF1E293B), Offset(w * 0.60f, h * 0.74f + bob), Offset(w * 0.62f + legSwing, h * 0.90f), strokeWidth = 3f, cap = StrokeCap.Round)
-                // Head
-                val hx = w * 0.72f
-                val hy = h * 0.43f + bob
-                drawCircle(color = foxOrange, radius = w * 0.17f, center = Offset(hx, hy))
-                drawFoxEar(Offset(hx - w * 0.10f, hy - w * 0.10f), w * 0.13f, foxOrange)
-                drawFoxEar(Offset(hx + w * 0.04f, hy - w * 0.12f), w * 0.13f, foxOrange)
-                // Eye
-                val eyeColor = if (isError) Color(0xFFEF4444) else Color(0xFF0F172A)
-                drawCircle(color = eyeColor, radius = 2.6f, center = Offset(hx + w * 0.06f, hy - 1.5f))
-                if (isConnected) {
-                    drawCircle(color = Color(0xFF10B981), radius = 4f, center = Offset(w * 0.88f, h * 0.2f))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                val headline = when {
+                    isConnected -> dtr("Connected & Protected", "متصل و ایمن")
+                    isConnecting -> dtr("Connecting Tunnel...", "در حال اتصال...")
+                    errState != null -> dtr(errState.error.titleEn, errState.error.titleFa)
+                    else -> dtr("Ready on Windows", "آماده اتصال روی ویندوز")
                 }
+                val sub = when {
+                    isConnecting -> (tunnelState as TunnelState.Connecting).let { dtr(it.stageLabelEn, it.stageLabelFa) }
+                    isConnected -> (tunnelState as TunnelState.Connected).activeEndpoint
+                    errState != null -> dtr(errState.error.reasonEn, errState.error.reasonFa)
+                    else -> dtr("Works on Windows 10 & Windows 11", "سازگار با ویندوز ۱۰ و ۱۱")
+                }
+                Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    text = sub,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
-        Column(modifier = Modifier.weight(1f)) {
-            val headline = when {
-                isConnected -> dtr("Connected & Protected", "متصل و ایمن")
-                isConnecting -> dtr("Connecting Tunnel...", "در حال اتصال...")
-                isError -> dtr("Connection Failed", "خطا در اتصال")
-                else -> dtr("Ready on Windows", "آماده اتصال روی ویندوز")
+
+        if (isPermissionDenied) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (onFallbackSystemProxy != null) {
+                        Button(
+                            onClick = onFallbackSystemProxy,
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                dtr("Connect via System Proxy (No Admin)", "اتصال فوری بدون ادمین (System Proxy)"),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                    if (onRestartAdmin != null) {
+                        OutlinedButton(
+                            onClick = onRestartAdmin,
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                dtr("Restart as Admin (Enable TUN)", "اجرا با دسترسی ادمین (TUN)"),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                    }
+                }
             }
-            val sub = when {
-                isConnecting -> (tunnelState as TunnelState.Connecting).let { dtr(it.stageLabelEn, it.stageLabelFa) }
-                isConnected -> (tunnelState as TunnelState.Connected).activeEndpoint
-                isError -> (tunnelState as TunnelState.Error).error.toString()
-                else -> dtr("Works on Windows 10 & Windows 11", "سازگار با ویندوز ۱۰ و ۱۱")
+        } else if (isConnected && showTunSuggestion) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = dtr(
+                            "System Proxy active — browsers work immediately. Suggestion: enable TUN Mode so online games (.exe) & all Windows apps route cleanly.",
+                            "اتصال با System Proxy برقرار است. پیشنهاد: برای عبور ترافیک گیم‌ها و همه برنامه‌های ویندوز، TUN Mode را روشن کنید.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (onEnableTunMode != null) {
+                        Button(onClick = onEnableTunMode, shape = RoundedCornerShape(8.dp)) {
+                            Text(dtr("Enable TUN Mode", "روشن کردن TUN Mode"), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    if (onDismissTunSuggestion != null) {
+                        TextButton(onClick = onDismissTunSuggestion) {
+                            Text(dtr("Dismiss", "بستن"), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
             }
-            Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text(
-                text = sub,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }

@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP"' EXIT
 HOST=$(ls "$NDK/toolchains/llvm/prebuilt" | head -1)
 BIN="$NDK/toolchains/llvm/prebuilt/$HOST/bin"
 EXT=""; [[ "$HOST" == windows* ]] && EXT=".cmd"
+export CGO_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 ${CGO_LDFLAGS:-}"
 
 echo "[1/5] Building libhev-socks5-tunnel.so (JNI package ir/pnifox/core/vpn)..."
 git clone --depth=1 --recursive https://github.com/heiher/hev-socks5-tunnel.git "$TMP/hev"

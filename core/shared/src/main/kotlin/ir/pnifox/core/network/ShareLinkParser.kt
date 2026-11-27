@@ -30,6 +30,8 @@ object ShareLinkParser {
         "ss://",
         "hy2://",
         "hysteria2://",
+        "tuic://",
+        "anytls://",
         "wg://",
         "wireguard://",
     )
@@ -162,6 +164,8 @@ object ShareLinkParser {
                 "trojan" -> ProxyProtocol.TROJAN
                 "shadowsocks" -> ProxyProtocol.SHADOWSOCKS
                 "hysteria2", "hy2" -> ProxyProtocol.HYSTERIA2
+                "tuic" -> ProxyProtocol.TUIC
+                "anytls" -> ProxyProtocol.ANYTLS
                 "wireguard" -> ProxyProtocol.WIREGUARD
                 "masque" -> ProxyProtocol.MASQUE
                 else -> return@mapNotNull null
@@ -172,6 +176,11 @@ object ShareLinkParser {
                     val m = ob["method"]?.jsonPrimitive?.content ?: "aes-256-gcm"
                     val p = ob["password"]?.jsonPrimitive?.content.orEmpty()
                     "$m:$p"
+                }
+                ProxyProtocol.TUIC -> {
+                    val u = ob["uuid"]?.jsonPrimitive?.content.orEmpty()
+                    val p = ob["password"]?.jsonPrimitive?.content.orEmpty()
+                    if (p.isNotBlank()) "$u:$p" else u
                 }
                 ProxyProtocol.WIREGUARD -> ob["private_key"]?.jsonPrimitive?.content.orEmpty()
                 else -> ob["uuid"]?.jsonPrimitive?.content
@@ -439,6 +448,8 @@ object ShareLinkParser {
             "trojan" -> ProxyProtocol.TROJAN
             "ss", "shadowsocks" -> ProxyProtocol.SHADOWSOCKS
             "hysteria2", "hy2" -> ProxyProtocol.HYSTERIA2
+            "tuic" -> ProxyProtocol.TUIC
+            "anytls" -> ProxyProtocol.ANYTLS
             "wireguard" -> ProxyProtocol.WIREGUARD
             else -> return null
         }
@@ -448,6 +459,11 @@ object ShareLinkParser {
         val name = map["name"]?.trim()?.ifBlank { null } ?: "${protocol.displayName} • $server:$port"
         val secret = when (protocol) {
             ProxyProtocol.SHADOWSOCKS -> "${map["cipher"] ?: "aes-256-gcm"}:${map["password"].orEmpty()}"
+            ProxyProtocol.TUIC -> {
+                val u = map["uuid"].orEmpty()
+                val p = map["password"].orEmpty()
+                if (p.isNotBlank()) "$u:$p" else u
+            }
             ProxyProtocol.WIREGUARD -> map["private-key"].orEmpty()
             else -> map["uuid"] ?: map["password"] ?: ""
         }
@@ -485,6 +501,8 @@ object ShareLinkParser {
             raw.startsWith("trojan://", ignoreCase = true) -> parseStandardUri(raw, ProxyProtocol.TROJAN, groupId, now)
             raw.startsWith("hy2://", ignoreCase = true) ||
                 raw.startsWith("hysteria2://", ignoreCase = true) -> parseStandardUri(raw, ProxyProtocol.HYSTERIA2, groupId, now)
+            raw.startsWith("tuic://", ignoreCase = true) -> parseStandardUri(raw, ProxyProtocol.TUIC, groupId, now)
+            raw.startsWith("anytls://", ignoreCase = true) -> parseStandardUri(raw, ProxyProtocol.ANYTLS, groupId, now)
             raw.startsWith("vmess://", ignoreCase = true) -> parseVmess(raw, groupId, now)
             raw.startsWith("ss://", ignoreCase = true) -> parseShadowsocks(raw, groupId, now)
             raw.startsWith("wg://", ignoreCase = true) ||
@@ -552,7 +570,10 @@ object ShareLinkParser {
             port = port,
             secret = userInfo,
             sni = params["sni"].orEmpty().ifBlank { params["host"].orEmpty() },
-            transport = params["type"].orEmpty().ifBlank { "tcp" },
+            transport = when (val t = params["type"].orEmpty().ifBlank { "tcp" }.lowercase()) {
+                "splithttp" -> "xhttp"
+                else -> t
+            },
             pathOrServiceName = params["path"].orEmpty().ifBlank { params["serviceName"].orEmpty() },
             tlsFingerprint = params["fp"].orEmpty().ifBlank { "chrome" },
             realityPublicKey = params["pbk"].orEmpty(),

@@ -11,6 +11,7 @@ enum class AppLanguage(val code: String, val displayLabel: String) {
 @Serializable
 enum class ActiveSectionEngine(val titleEn: String, val titleFa: String) {
     AETHER("AETHER (WARP / MASQUE)", "موتور AETHER (وارپ)"),
+    GAMING("Gaming & Low Ping", "گیم و پینگ پایین"),
     SERVER("Custom Server (Xray / Sing-box)", "سرور دلخواه"),
     DNS("DNS Tunnel (DNSTT)", "تونل DNS"),
     MHR("MasterHttpRelay (mhrv-rs)", "رله MHR (مستر رله)"),
@@ -44,6 +45,7 @@ enum class CoreEngine(val displayEn: String, val displayFa: String, val binaryNa
     TOR("Tor Network", "شبکه تور", "libtor.so"),
     DNSTT("DNSTT Tunnel", "تونل DNSTT", "libdnstt.so"),
     MHR("MasterHttpRelay", "هسته MHR", "libmhrv_rs.so"),
+    LOCAL_DESYNC("Local DPI Desync", "ضدDPI محلی (بدون سرور)", null),
     SERVERLESS("Serverless Fragment", "بدون سرور", null),
 }
 
@@ -98,6 +100,8 @@ enum class ProxyProtocol(val scheme: String, val displayName: String) {
     TROJAN("trojan", "Trojan"),
     SHADOWSOCKS("ss", "Shadowsocks"),
     HYSTERIA2("hy2", "Hysteria2"),
+    TUIC("tuic", "TUIC v5"),
+    ANYTLS("anytls", "AnyTLS"),
     WIREGUARD("wg", "WireGuard"),
     MASQUE("masque", "MASQUE"),
 }
@@ -136,11 +140,11 @@ sealed interface ConnectionError {
 
     @Serializable
     data class PermissionDenied(
+        override val titleEn: String = "VPN Permission Required",
+        override val titleFa: String = "مجوز VPN رد شد",
         override val reasonEn: String = "Android VPN permission was not granted.",
         override val reasonFa: String = "مجوز ساخت تونل VPN در اندروید تایید نشد.",
     ) : ConnectionError {
-        override val titleEn: String = "VPN Permission Required"
-        override val titleFa: String = "مجوز VPN رد شد"
         override val suggestions: List<RecoveryAction> = emptyList()
     }
 

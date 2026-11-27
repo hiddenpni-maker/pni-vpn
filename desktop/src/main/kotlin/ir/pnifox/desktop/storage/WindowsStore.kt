@@ -3,8 +3,10 @@ package ir.pnifox.desktop.storage
 import ir.pnifox.core.model.AetherSettings
 import ir.pnifox.core.model.AppSettings
 import ir.pnifox.core.model.DnsTunnelSettings
+import ir.pnifox.core.model.GamingSettings
 import ir.pnifox.core.model.MhrSettings
 import ir.pnifox.core.model.ProxyProfile
+import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.SubscriptionGroup
 import ir.pnifox.core.model.WarpKey
 import ir.pnifox.desktop.model.DesktopPersistedState
@@ -74,6 +76,22 @@ class WindowsStore(
 
     fun setWindowsTunnelMode(mode: WindowsTunnelMode) = update {
         it.copy(windowsTunnelMode = mode)
+    }
+
+    fun updateGamingSettings(transform: (GamingSettings) -> GamingSettings) = update {
+        it.copy(gamingSettings = transform(it.gamingSettings))
+    }
+
+    fun setSelectedScenario(scenarioId: ScenarioGoalId?) = update {
+        it.copy(selectedScenarioId = scenarioId)
+    }
+
+    fun updateBanditState(nextJson: String) = update {
+        it.copy(banditStateJson = nextJson)
+    }
+
+    fun setTunPromptDismissed(dismissed: Boolean) = update {
+        it.copy(tunPromptDismissed = dismissed)
     }
 
     fun saveProfiles(newProfiles: List<ProxyProfile>) = update { cur ->

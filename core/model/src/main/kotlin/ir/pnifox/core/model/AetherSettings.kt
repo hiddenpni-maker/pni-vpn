@@ -93,8 +93,11 @@ data class AetherSettings(
     val fragmentSizeBytes: String = "8-16",
     val fragmentDelayMs: String = "2-10",
     val echEnabled: Boolean = false,
+    val smartEchBootstrap: Boolean = true,
+    val echBase64Override: String = "",
     val echDns: String = "udp://1.1.1.1",
     val echDomain: String = "cloudflare-ech.com",
+    val quicV2Enabled: Boolean = true,
     val exitDialMode: ExitDialMode = ExitDialMode.FREEDOM,
     val finalMaskRawJson: String = "",
     val psiphonEnabled: Boolean = false,
@@ -116,4 +119,49 @@ data class AetherSettings(
     val goolAccountRegistered: Boolean = false,
     val localSocksPort: Int = 10820,
     val innerAetherBindPort: Int = 10822,
+)
+
+@Serializable
+enum class GamingMode(
+    val titleEn: String,
+    val titleFa: String,
+    val subtitleEn: String,
+    val subtitleFa: String,
+) {
+    DNS_ANTI_SANCTION(
+        titleEn = "Anti-Sanction Gaming DNS (0ms Extra Ping)",
+        titleFa = "تغییر DNS گیمینگ ضدتحریم (بدون افت پینگ)",
+        subtitleEn = "Uses Radar/Electro/403/Shecan/DoQ DNS to unlock Valorant, CoD, Fortnite & EA without proxying UDP packets.",
+        subtitleFa = "رفع تحریم بازی‌های آنلاین (وارزون، ولورانت، EA، سوپرسل) بدون عبور ترافیک از پروکسی و بدون افزایش پینگ.",
+    ),
+    LOCAL_DPI_DESYNC(
+        titleEn = "Local DPI Desync (Zero Server / Original Ping)",
+        titleFa = "دورزدن محلی DPI (بدون سرور، پینگ اصلی)",
+        subtitleEn = "Splits TLS ClientHello & uses clean DoH locally on device with zero remote hop — original ISP ping preserved.",
+        subtitleFa = "خرد کردن بسته‌های فیلترینگ روی خود دستگاه بدون سرور واسط + DNS ضدتحریم (پینگ و سرعت مستقیم).",
+    ),
+    AETHER_UDP_QUIC(
+        titleEn = "AETHER Gaming UDP (WARP WG / MASQUE H3 + QUIC v2)",
+        titleFa = "تونل گیمینگ WARP (WireGuard / MASQUE QUIC v2)",
+        subtitleEn = "Full UDP tunneling over scanned low-jitter Cloudflare endpoint with MTU tuning & Iran game-relay bypass.",
+        subtitleFa = "عبور کامل ترافیک بازی روی UDP (مناسب زمانی که پورت بازی یا لابی کاملاً فیلتر است).",
+    ),
+    CUSTOM_SERVER(
+        titleEn = "Low-Ping Gaming Server (WG / Hysteria2 / VLESS)",
+        titleFa = "سرور گیمینگ اختصاصی (WireGuard / Hy2 / VLESS)",
+        subtitleEn = "Connects your lowest-latency personal WireGuard, Hysteria2, TUIC v5, or VLESS Reality server.",
+        subtitleFa = "اتصال به کم‌پینگ‌ترین سرور شخصی واردشده از بخش سرورها (مناسب WireGuard و Hysteria2).",
+    ),
+}
+
+@Serializable
+data class GamingSettings(
+    val mode: GamingMode = GamingMode.DNS_ANTI_SANCTION,
+    val selectedDnsIp: String = "10.202.10.10",
+    val blockQuicUdp443: Boolean = false,
+    val desyncChunkLen: Int = 6,
+    val fakeSniHost: String = "www.cloudflare.com",
+    val udpMtu: Int = 1380,
+    val preferQuicV2H3: Boolean = true,
+    val bypassIranGameTraffic: Boolean = true,
 )

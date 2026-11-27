@@ -11,6 +11,8 @@ import ir.pnifox.core.model.DnsEngineType
 import ir.pnifox.core.model.DnsInnerProtocol
 import ir.pnifox.core.model.DnsTunnelSettings
 import ir.pnifox.core.model.ExitNode
+import ir.pnifox.core.model.GamingMode
+import ir.pnifox.core.model.GamingSettings
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.MhrSettings
 import ir.pnifox.core.model.OneTapPreset
@@ -68,6 +70,11 @@ class NativeProcessManager @Inject constructor(
     @Volatile private var xrayStarted = false
     @Volatile var activeXrayProfileId: String? = null
         private set
+    @Volatile private var localDesyncServer: LocalDpiDesyncServer? = null
+    @Volatile var activeSocketProtector: ((Socket) -> Unit)? = null
+    @Volatile var activeDatagramProtector: ((java.net.DatagramSocket) -> Unit)? = null
+
+    fun localDesyncBytesSnapshot(): Pair<Long, Long>? = localDesyncServer?.bytesSnapshot()
 
     val aetherWorkDir: File
         get() = File(context.filesDir, "aether").apply { mkdirs() }
@@ -224,6 +231,79 @@ class NativeProcessManager @Inject constructor(
         }
     }
 
+    suspend fun startGamingDaemon(
+        gaming: GamingSettings,
+        appSettings: AppSettings,
+        aetherSettings: AetherSettings,
+        activeProfile: ProxyProfile?,
+        onStageUpdate: (stageEn: String, stageFa: String) -> Unit = { _, _ -> },
+        onEndpointDiscovered: (ip: String, port: Int) -> Unit = { _, _ -> },
+    ): ConnectionError? = when (gaming.mode) {
+        GamingMode.DNS_ANTI_SANCTION -> {
+            onStageUpdate("Starting Anti-Sanction Gaming DNS...", "در حال فعال‌سازی DNS ضدتحریم گیم...")
+            val gamingApp = appSettings.copy(bypassIranEnabled = gaming.bypassIranGameTraffic)
+            val dnsStub = DnsTunnelSettings().copy(
+                engineType = DnsEngineType.DNS_CHANGER,
+                mode = ir.pnifox.core.model.DnsTunnelMode.UDP,
+                resolverAddress = gaming.selectedDnsIp.ifBlank { "10.202.10.10" },
+            )
+            startDnsChangerDaemon(dnsStub, gamingApp, aetherSettings.localSocksPort)
+        }
+        GamingMode.LOCAL_DPI_DESYNC -> withContext(Dispatchers.IO) {
+            stopAll()
+            onStageUpdate("Starting Local DPI Desync (0-Server)...", "در حال اجرای ضدDPI محلی بدون سرور...")
+            val srv = LocalDpiDesyncServer(
+                listenPort = aetherSettings.localSocksPort,
+                bindHost = if (appSettings.allowLan) "0.0.0.0" else "127.0.0.1",
+                fragmentChunkSize = gaming.desyncChunkLen,
+                fragmentDelayMs = 2L,
+                preferCleanDns = gaming.selectedDnsIp.substringBefore(':').ifBlank { "1.1.1.1" },
+                protectTcpSocket = activeSocketProtector,
+                protectUdpSocket = activeDatagramProtector,
+                onLog = { msg -> logs.append("DPI-Desync", LogLevel.INFO, msg) },
+            )
+            srv.start()
+            localDesyncServer = srv
+            val ready = awaitLocalSocksReady(
+                tag = "DPI-Desync",
+                proc = null,
+                socksPort = aetherSettings.localSocksPort,
+                timeoutMs = 5_000L,
+                waitOnMarkersFirst = false,
+                verifySocksReply = true,
+            )
+            if (ready != null) stopAll()
+            ready
+        }
+        GamingMode.AETHER_UDP_QUIC -> {
+            if (!inspectAetherIdentities().hasMasqueToml) {
+                onStageUpdate("Preparing WARP gaming identity...", "در حال آماده‌سازی هویت گیمینگ WARP...")
+                ensureMasqueIdentityIfMissing(aetherSettings)
+            }
+            val gamingApp = appSettings.copy(
+                mtu = gaming.udpMtu,
+                bypassIranEnabled = gaming.bypassIranGameTraffic,
+                activePreset = OneTapPreset.WARP_FAST_MASQUE_H2,
+                exitNode = ExitNode.DEFAULT,
+            )
+            val gamingAether = aetherSettings.copy(
+                protocol = AetherProtocol.MASQUE,
+                masqueTransport = if (gaming.preferQuicV2H3) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
+                quicV2Enabled = gaming.preferQuicV2H3,
+                psiphonEnabled = false,
+                torEnabled = false,
+            )
+            startAetherDaemon(gamingApp, gamingAether, onStageUpdate, onEndpointDiscovered)
+        }
+        GamingMode.CUSTOM_SERVER -> {
+            if (activeProfile == null) {
+                ConnectionError.ProcessExited(-1, "Select a gaming server profile first.")
+            } else {
+                startCustomServerDaemon(activeProfile, appSettings, aetherSettings.localSocksPort)
+            }
+        }
+    }
+
     suspend fun startAetherDaemon(
         appSettings: AppSettings,
         aether: AetherSettings,
@@ -248,7 +328,18 @@ class NativeProcessManager @Inject constructor(
                 "Rules active (BypassIran=${appSettings.bypassIranEnabled}, Private=${appSettings.bypassPrivateLanEnabled}, AdBlock=${appSettings.blockAdsEnabled})",
             )
         }
-        val args = argBuilder.buildRunArgs(appSettings, aether, nativeDir, aetherWorkDir, serversDat, routesFile)
+        val effectiveAether = if (aether.echEnabled && aether.smartEchBootstrap && aether.echBase64Override.isBlank()) {
+            onStageUpdate("Bootstrapping Smart ECH (DoH/DoT/53)...", "در حال دریافت هوشمند کلید ECH...")
+            val res = EchBootstrapResolver.resolveEchConfig(
+                targetDomain = aether.echDomain.ifBlank { "cloudflare-ech.com" },
+                customDohOrDns = aether.echDns,
+                onLog = { msg -> logs.append("ECH-Bootstrap", LogLevel.INFO, msg) },
+            )
+            if (res != null) aether.copy(echBase64Override = res.echConfigBase64) else aether
+        } else {
+            aether
+        }
+        val args = argBuilder.buildRunArgs(appSettings, effectiveAether, nativeDir, aetherWorkDir, serversDat, routesFile)
         val usePsiphon = aether.psiphonEnabled ||
             appSettings.exitNode == ExitNode.PSIPHON ||
             appSettings.activePreset == OneTapPreset.WARP_TO_PSIPHON
@@ -452,7 +543,13 @@ class NativeProcessManager @Inject constructor(
         }
 
         val isRawJson = profile.rawUri.trimStart().startsWith("{")
-        if (!isRawJson && (profile.protocol == ProxyProtocol.HYSTERIA2 || profile.protocol == ProxyProtocol.WIREGUARD)) {
+        val useSingBox = !isRawJson && (
+            profile.protocol == ProxyProtocol.HYSTERIA2 ||
+                profile.protocol == ProxyProtocol.WIREGUARD ||
+                profile.protocol == ProxyProtocol.TUIC ||
+                profile.protocol == ProxyProtocol.ANYTLS
+            )
+        if (useSingBox) {
             val sbBin = File(nativeDir, "libpnisingbox.so")
             if (!sbBin.exists()) {
                 return@withContext ConnectionError.MissingBinary(
@@ -808,5 +905,7 @@ class NativeProcessManager @Inject constructor(
             xrayStarted = false
         }
         activeXrayProfileId = null
+        localDesyncServer?.stop()
+        localDesyncServer = null
     }
 }

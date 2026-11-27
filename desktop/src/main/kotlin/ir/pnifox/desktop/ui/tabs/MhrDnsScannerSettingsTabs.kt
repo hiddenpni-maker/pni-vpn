@@ -104,10 +104,21 @@ fun MhrDesktopTab(
 
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
+            val showTunHint = state.persisted.windowsTunnelMode == WindowsTunnelMode.SYSTEM_PROXY &&
+                !mhr.proxyOnly &&
+                !state.persisted.tunPromptDismissed
             DesktopCard {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        DesktopFoxMascot(tunnelState = state.tunnelState, section = ActiveSectionEngine.MHR)
+                        DesktopFoxMascot(
+                            tunnelState = state.tunnelState,
+                            section = ActiveSectionEngine.MHR,
+                            onFallbackSystemProxy = { holder.connectViaSystemProxyFallback(ActiveSectionEngine.MHR) },
+                            onRestartAdmin = { holder.relaunchAsAdmin() },
+                            showTunSuggestion = showTunHint,
+                            onEnableTunMode = { holder.enableTunAndReconnect(ActiveSectionEngine.MHR) },
+                            onDismissTunSuggestion = { holder.dismissTunSuggestion() },
+                        )
                         Spacer(Modifier.height(8.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             MhrMode.entries.forEach { mode ->
@@ -429,13 +440,23 @@ fun DnsDesktopTab(
     val dns = state.persisted.dnsSettings
     val isConnected = state.tunnelState is TunnelState.Connected && state.tunnelState.section == ActiveSectionEngine.DNS
     val isConnecting = state.tunnelState is TunnelState.Connecting && state.tunnelState.section == ActiveSectionEngine.DNS
+    var customScanIps by remember { mutableStateOf("") }
+    val showTunHint = state.persisted.windowsTunnelMode == WindowsTunnelMode.SYSTEM_PROXY && !state.persisted.tunPromptDismissed
 
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             DesktopCard {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        DesktopFoxMascot(tunnelState = state.tunnelState, section = ActiveSectionEngine.DNS)
+                        DesktopFoxMascot(
+                            tunnelState = state.tunnelState,
+                            section = ActiveSectionEngine.DNS,
+                            onFallbackSystemProxy = { holder.connectViaSystemProxyFallback(ActiveSectionEngine.DNS) },
+                            onRestartAdmin = { holder.relaunchAsAdmin() },
+                            showTunSuggestion = showTunHint,
+                            onEnableTunMode = { holder.enableTunAndReconnect(ActiveSectionEngine.DNS) },
+                            onDismissTunSuggestion = { holder.dismissTunSuggestion() },
+                        )
                         Spacer(Modifier.height(8.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             DnsEngineType.entries.forEach { et ->
@@ -544,6 +565,97 @@ fun DnsDesktopTab(
                         }
                         if (state.dnsProbeStatus.isNotBlank()) {
                             Text(state.dnsProbeStatus, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Zero-ICMP Port-53 End-to-End DNS Scanner (rejects 10.10.34.34-36 sinkhole poisoning)
+        item {
+            DesktopCard {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            dtr("Zero-ICMP Port-53 E2E DNS Scanner", "اسکنر واقعی پورت ۵۳ DNS (بدون پینگ ICMP)"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            dtr(
+                                "Tests real UDP/53 resolution instead of ICMP ping and detects ISP DNS poisoning (10.10.34.34-36).",
+                                "به جای پینگ عادی، رزولوشن واقعی روی پورت ۵۳ را می‌سنجد و سرورهای مسموم (10.10.34.x) را جدا می‌کند.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(
+                        onClick = { holder.runDnsE2EScan(customScanIps) },
+                        enabled = !state.isScanningDnsE2e,
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        if (state.isScanningDnsE2e) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (state.isScanningDnsE2e) dtr("Scanning...", "در حال اسکن...") else dtr("Scan Clean DNS", "اسکن DNS سالم"))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = customScanIps,
+                    onValueChange = { customScanIps = it },
+                    label = { Text(dtr("Extra Custom Resolver IPs (comma-separated, optional)", "آی‌پی‌های دلخواه اضافه (با کاما جدا کنید)")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (state.dnsE2eProgressText.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(state.dnsE2eProgressText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                }
+                if (state.dnsE2eResults.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        state.dnsE2eResults.forEach { res ->
+                            val statusColor = when {
+                                res.isPoisoned -> Color(0xFFEF4444)
+                                res.isReachable -> Color(0xFF10B981)
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("${res.label} (${res.ip})", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                        Text(
+                                            text = if (isFa) res.statusNoteFa else res.statusNoteEn,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = statusColor,
+                                        )
+                                    }
+                                    if (res.isReachable) {
+                                        Text("${res.latencyMs}ms", style = MaterialTheme.typography.labelMedium, color = statusColor, fontWeight = FontWeight.Bold)
+                                    }
+                                    if (res.isReachable && !res.isPoisoned) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                holder.updateDns { it.copy(mode = DnsTunnelMode.UDP, resolverAddress = "${res.ip}:53") }
+                                                holder.updateGaming { it.copy(selectedDnsIp = res.ip) }
+                                                holder.setBanner("Applied clean DNS ${res.ip}:53")
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                        ) {
+                                            Text(dtr("Apply", "اعمال"), style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

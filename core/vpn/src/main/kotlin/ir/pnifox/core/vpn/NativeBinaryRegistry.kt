@@ -13,6 +13,8 @@ import ir.pnifox.core.model.DnsEngineType
 import ir.pnifox.core.model.DnsInnerProtocol
 import ir.pnifox.core.model.DnsTunnelSettings
 import ir.pnifox.core.model.ExitNode
+import ir.pnifox.core.model.GamingMode
+import ir.pnifox.core.model.GamingSettings
 import ir.pnifox.core.model.NativeBinaryId
 import ir.pnifox.core.model.NativeBinaryStatus
 import ir.pnifox.core.model.OneTapPreset
@@ -65,8 +67,15 @@ class NativeBinaryRegistry @Inject constructor(
         aetherSettings: AetherSettings,
         activeProfile: ProxyProfile?,
         dnsSettings: DnsTunnelSettings = DnsTunnelSettings(),
+        gamingSettings: GamingSettings = GamingSettings(),
     ): CoreEngine = when (section) {
         ActiveSectionEngine.AETHER -> CoreEngine.AETHER
+        ActiveSectionEngine.GAMING -> when (gamingSettings.mode) {
+            GamingMode.DNS_ANTI_SANCTION -> CoreEngine.XRAY
+            GamingMode.LOCAL_DPI_DESYNC -> CoreEngine.LOCAL_DESYNC
+            GamingMode.AETHER_UDP_QUIC -> CoreEngine.AETHER
+            GamingMode.CUSTOM_SERVER -> resolveEngineForSection(ActiveSectionEngine.SERVER, appSettings, aetherSettings, activeProfile, dnsSettings, gamingSettings)
+        }
         ActiveSectionEngine.DNS -> when (dnsSettings.engineType) {
             DnsEngineType.AUTO_TUNNEL -> CoreEngine.AETHER
             DnsEngineType.DNS_CHANGER -> CoreEngine.XRAY
@@ -75,7 +84,9 @@ class NativeBinaryRegistry @Inject constructor(
         ActiveSectionEngine.SERVER -> when {
             activeProfile?.rawUri?.trimStart()?.startsWith("{") == true -> CoreEngine.XRAY
             activeProfile?.protocol == ProxyProtocol.HYSTERIA2 ||
-                activeProfile?.protocol == ProxyProtocol.WIREGUARD -> CoreEngine.SING_BOX
+                activeProfile?.protocol == ProxyProtocol.WIREGUARD ||
+                activeProfile?.protocol == ProxyProtocol.TUIC ||
+                activeProfile?.protocol == ProxyProtocol.ANYTLS -> CoreEngine.SING_BOX
             else -> CoreEngine.XRAY
         }
         ActiveSectionEngine.MHR -> CoreEngine.MHR
@@ -87,6 +98,7 @@ class NativeBinaryRegistry @Inject constructor(
         aetherSettings: AetherSettings,
         activeProfile: ProxyProfile?,
         dnsSettings: DnsTunnelSettings = DnsTunnelSettings(),
+        gamingSettings: GamingSettings = GamingSettings(),
     ): ConnectionError.MissingBinary? {
         val statuses = inspectAll().associateBy { it.binary }
         val abi = primaryAbi()
@@ -110,10 +122,30 @@ class NativeBinaryRegistry @Inject constructor(
                         add(NativeBinaryId.LYREBIRD)
                     }
                 }
+                ActiveSectionEngine.GAMING -> when (gamingSettings.mode) {
+                    GamingMode.DNS_ANTI_SANCTION -> add(NativeBinaryId.XRAY)
+                    GamingMode.LOCAL_DPI_DESYNC -> Unit // Runs built-in Kotlin LocalDpiDesyncServer (0 binary deps!)
+                    GamingMode.AETHER_UDP_QUIC -> add(NativeBinaryId.AETHER)
+                    GamingMode.CUSTOM_SERVER -> {
+                        val p = activeProfile
+                        if (p != null) {
+                            when {
+                                p.rawUri.trimStart().startsWith("{") -> add(NativeBinaryId.XRAY)
+                                p.protocol == ProxyProtocol.HYSTERIA2 ||
+                                    p.protocol == ProxyProtocol.WIREGUARD ||
+                                    p.protocol == ProxyProtocol.TUIC ||
+                                    p.protocol == ProxyProtocol.ANYTLS -> add(NativeBinaryId.SING_BOX)
+                                else -> add(NativeBinaryId.XRAY)
+                            }
+                        }
+                    }
+                }
                 ActiveSectionEngine.SERVER -> when {
                     activeProfile?.rawUri?.trimStart()?.startsWith("{") == true -> add(NativeBinaryId.XRAY)
                     activeProfile?.protocol == ProxyProtocol.HYSTERIA2 ||
-                        activeProfile?.protocol == ProxyProtocol.WIREGUARD -> add(NativeBinaryId.SING_BOX)
+                        activeProfile?.protocol == ProxyProtocol.WIREGUARD ||
+                        activeProfile?.protocol == ProxyProtocol.TUIC ||
+                        activeProfile?.protocol == ProxyProtocol.ANYTLS -> add(NativeBinaryId.SING_BOX)
                     else -> add(NativeBinaryId.XRAY)
                 }
                 ActiveSectionEngine.DNS -> when (dnsSettings.engineType) {

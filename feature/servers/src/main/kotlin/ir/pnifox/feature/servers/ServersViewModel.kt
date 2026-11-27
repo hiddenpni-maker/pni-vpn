@@ -124,6 +124,8 @@ class ServersViewModel @Inject constructor(
             }
             ServerCategory.HY2_WG -> profiles.filter {
                 it.protocol == ProxyProtocol.HYSTERIA2 ||
+                    it.protocol == ProxyProtocol.TUIC ||
+                    it.protocol == ProxyProtocol.ANYTLS ||
                     it.protocol == ProxyProtocol.WIREGUARD ||
                     it.protocol == ProxyProtocol.SHADOWSOCKS ||
                     it.protocol == ProxyProtocol.MASQUE

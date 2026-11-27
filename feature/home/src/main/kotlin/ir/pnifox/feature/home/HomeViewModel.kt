@@ -15,25 +15,35 @@ import ir.pnifox.core.model.AetherSettings
 import ir.pnifox.core.model.AppSettings
 import ir.pnifox.core.model.ConnectionMode
 import ir.pnifox.core.model.ExitNode
+import ir.pnifox.core.model.GamingMode
 import ir.pnifox.core.model.MasqueTransport
 import ir.pnifox.core.model.OneTapPreset
 import ir.pnifox.core.model.RecoveryAction
+import ir.pnifox.core.model.ScenarioGoalId
+import ir.pnifox.core.model.ScenarioProfile
 import ir.pnifox.core.model.TransportMode
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.network.WarpKeyClient
 import ir.pnifox.core.vpn.AetherArgBuilder
 import ir.pnifox.core.vpn.AetherIdentityFilesState
+import ir.pnifox.core.vpn.EchBootstrapResolver
 import ir.pnifox.core.vpn.LogEntry
 import ir.pnifox.core.vpn.LogLevel
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.NativeProcessManager
+import ir.pnifox.core.vpn.SmartConnectOrchestrator
+import ir.pnifox.core.vpn.StrategyArm
 import ir.pnifox.core.vpn.VpnController
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
 
@@ -46,6 +56,10 @@ data class HomeUiState(
     val selectedKeyTarget: AetherIdentityTarget = AetherIdentityTarget.ALL,
     val isRegisteringKeys: Boolean = false,
     val isTestingPing: Boolean = false,
+    val isFetchingEch: Boolean = false,
+    val isSmartConnecting: Boolean = false,
+    val smartConnectStatus: String? = null,
+    val selectedScenario: ScenarioGoalId? = null,
     val keyActionMessage: String? = null,
     val rxSpeedBps: Long = 0L,
     val txSpeedBps: Long = 0L,
@@ -58,6 +72,9 @@ private data class AetherRuntimeTuple(
     val selectedKeyTarget: AetherIdentityTarget = AetherIdentityTarget.ALL,
     val isRegisteringKeys: Boolean = false,
     val isTestingPing: Boolean = false,
+    val isFetchingEch: Boolean = false,
+    val isSmartConnecting: Boolean = false,
+    val smartConnectStatus: String? = null,
     val keyActionMessage: String? = null,
     val identities: AetherIdentityFilesState = AetherIdentityFilesState(false, false, false),
 )
@@ -98,6 +115,7 @@ class HomeViewModel @Inject constructor(
         vpnController.tunnelState,
         preferencesRepo.appSettingsFlow,
         preferencesRepo.aetherSettingsFlow,
+        preferencesRepo.selectedScenarioIdFlow,
         aetherRuntime,
         trafficFlow,
         logRingBuffer.logsFlow,
@@ -105,10 +123,11 @@ class HomeViewModel @Inject constructor(
         val state = values[0] as TunnelState
         val app = values[1] as AppSettings
         val aether = values[2] as AetherSettings
-        val rt = values[3] as AetherRuntimeTuple
-        val traffic = values[4] as HomeTrafficTuple
+        val scenario = values[3] as ScenarioGoalId?
+        val rt = values[4] as AetherRuntimeTuple
+        val traffic = values[5] as HomeTrafficTuple
         @Suppress("UNCHECKED_CAST")
-        val logList = values[5] as List<LogEntry>
+        val logList = values[6] as List<LogEntry>
 
         val psiphonDat = File(context.filesDir, "aether/psiphon_servers.dat").absolutePath
         HomeUiState(
@@ -120,6 +139,10 @@ class HomeViewModel @Inject constructor(
             selectedKeyTarget = rt.selectedKeyTarget,
             isRegisteringKeys = rt.isRegisteringKeys,
             isTestingPing = rt.isTestingPing,
+            isFetchingEch = rt.isFetchingEch,
+            isSmartConnecting = rt.isSmartConnecting,
+            smartConnectStatus = rt.smartConnectStatus,
+            selectedScenario = scenario,
             keyActionMessage = rt.keyActionMessage,
             rxSpeedBps = traffic.rxSpeedBps,
             txSpeedBps = traffic.txSpeedBps,
@@ -338,6 +361,148 @@ class HomeViewModel @Inject constructor(
             RecoveryAction.RENEW_WARP_KEYS -> generateAetherKeys()
             RecoveryAction.OPEN_LOGS -> onOpenLogs()
         }
+    }
+
+    fun applyScenario(
+        profile: ScenarioProfile,
+        autoConnect: Boolean,
+        onNavigateSection: (ActiveSectionEngine) -> Unit,
+    ) {
+        viewModelScope.launch {
+            preferencesRepo.saveSelectedScenarioId(profile.id)
+            preferencesRepo.updateAppSettings {
+                it.copy(
+                    activeSection = profile.recommendedSection,
+                    activePreset = profile.recommendedAetherPreset,
+                    exitNode = if (profile.recommendedPsiphon) ExitNode.PSIPHON else ExitNode.DEFAULT,
+                )
+            }
+            preferencesRepo.updateAetherSettings {
+                it.copy(
+                    protocol = profile.recommendedAetherProtocol,
+                    masqueTransport = if (profile.recommendedQuicV2) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
+                    psiphonEnabled = profile.recommendedPsiphon,
+                    torEnabled = false,
+                    noizeProfile = profile.recommendedNoiseProfile,
+                    echEnabled = profile.recommendedEch,
+                    quicV2Enabled = profile.recommendedQuicV2,
+                )
+            }
+            preferencesRepo.updateGamingSettings {
+                it.copy(mode = profile.recommendedGamingMode, preferQuicV2H3 = profile.recommendedQuicV2)
+            }
+            preferencesRepo.updateDnsSettings {
+                it.copy(engineType = profile.recommendedDnsEngine)
+            }
+            if (profile.recommendedSection != ActiveSectionEngine.AETHER) {
+                onNavigateSection(profile.recommendedSection)
+            }
+            if (autoConnect) {
+                vpnController.startConnection(profile.recommendedSection)
+            }
+        }
+    }
+
+    fun fetchEchConfigNow() {
+        if (aetherRuntime.value.isFetchingEch) return
+        viewModelScope.launch {
+            aetherRuntime.value = aetherRuntime.value.copy(isFetchingEch = true)
+            val aether = uiState.value.aetherSettings
+            val res = withContext(Dispatchers.IO) {
+                EchBootstrapResolver.resolveEchConfig(
+                    targetDomain = aether.echDomain.ifBlank { "cloudflare-ech.com" },
+                    customDohOrDns = aether.echDns,
+                    onLog = { logRingBuffer.append("ECH-Bootstrap", LogLevel.INFO, it) },
+                )
+            }
+            if (res != null) {
+                preferencesRepo.updateAetherSettings {
+                    it.copy(echEnabled = true, echBase64Override = res.echConfigBase64)
+                }
+                aetherRuntime.value = aetherRuntime.value.copy(
+                    isFetchingEch = false,
+                    keyActionMessage = "Smart ECH ready via ${res.sourceLabel}",
+                )
+            } else {
+                aetherRuntime.value = aetherRuntime.value.copy(
+                    isFetchingEch = false,
+                    keyActionMessage = "Could not fetch external ECH; Aether will use --ech auto.",
+                )
+            }
+        }
+    }
+
+    fun smartAutoConnect() {
+        if (aetherRuntime.value.isSmartConnecting) return
+        viewModelScope.launch {
+            aetherRuntime.value = aetherRuntime.value.copy(
+                isSmartConnecting = true,
+                smartConnectStatus = "Evaluating ranked routes...",
+            )
+            val banditJson = preferencesRepo.banditScoresFlow.first()
+            val arms = SmartConnectOrchestrator.rankedArms(uiState.value.selectedScenario, banditJson).take(3)
+            var currentJson = banditJson
+            for ((idx, arm) in arms.withIndex()) {
+                aetherRuntime.value = aetherRuntime.value.copy(
+                    smartConnectStatus = "Trying ${arm.titleEn} (${idx + 1}/${arms.size})...",
+                )
+                val section = applyStrategyArm(arm)
+                val t0 = System.currentTimeMillis()
+                vpnController.startConnection(section)
+                val deadline = System.currentTimeMillis() + 26_000L
+                while (System.currentTimeMillis() < deadline && vpnController.tunnelState.value is TunnelState.Connecting) {
+                    delay(350L)
+                }
+                val st = vpnController.tunnelState.value
+                val elapsed = (System.currentTimeMillis() - t0).coerceAtLeast(50L)
+                val ok = st is TunnelState.Connected && (vpnController.refreshActiveRealDelay() != null || arm == StrategyArm.GAMING_DNS)
+                currentJson = SmartConnectOrchestrator.recordOutcome(currentJson, arm, ok, elapsed)
+                preferencesRepo.saveBanditScores(currentJson)
+                if (ok) {
+                    aetherRuntime.value = aetherRuntime.value.copy(
+                        isSmartConnecting = false,
+                        smartConnectStatus = "Connected via ${arm.titleEn} ✓",
+                    )
+                    return@launch
+                }
+            }
+            aetherRuntime.value = aetherRuntime.value.copy(
+                isSmartConnecting = false,
+                smartConnectStatus = "Tested top strategies; check Logs or pick a Scenario.",
+            )
+        }
+    }
+
+    private suspend fun applyStrategyArm(arm: StrategyArm): ActiveSectionEngine = when (arm) {
+        StrategyArm.AETHER_MASQUE_H2 -> {
+            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.DEFAULT) }
+            preferencesRepo.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP2, psiphonEnabled = false, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.AETHER_MASQUE_H3 -> {
+            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.MASQUE_IN_MASQUE, exitNode = ExitNode.DEFAULT) }
+            preferencesRepo.updateAetherSettings { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP3, quicV2Enabled = true, psiphonEnabled = false, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.AETHER_WG_NOIZE -> {
+            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.WG_OVER_MASQUE, exitNode = ExitNode.DEFAULT) }
+            preferencesRepo.updateAetherSettings { it.copy(protocol = AetherProtocol.WIREGUARD_OVER_MASQUE, psiphonEnabled = false, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.AETHER_PSIPHON -> {
+            preferencesRepo.updateAppSettings { it.copy(activePreset = OneTapPreset.WARP_TO_PSIPHON, exitNode = ExitNode.PSIPHON) }
+            preferencesRepo.updateAetherSettings { it.copy(psiphonEnabled = true, torEnabled = false) }
+            ActiveSectionEngine.AETHER
+        }
+        StrategyArm.LOCAL_DPI_DESYNC -> {
+            preferencesRepo.updateGamingSettings { it.copy(mode = GamingMode.LOCAL_DPI_DESYNC) }
+            ActiveSectionEngine.GAMING
+        }
+        StrategyArm.GAMING_DNS -> {
+            preferencesRepo.updateGamingSettings { it.copy(mode = GamingMode.DNS_ANTI_SANCTION) }
+            ActiveSectionEngine.GAMING
+        }
+        StrategyArm.MHR_RELAY -> ActiveSectionEngine.MHR
     }
 
     fun dismissBanner() {

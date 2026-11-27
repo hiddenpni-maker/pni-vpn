@@ -16,6 +16,8 @@ import ir.pnifox.core.model.IranPresetsCatalog
 import ir.pnifox.core.model.LogEntry
 import ir.pnifox.core.model.LogLevel
 import ir.pnifox.core.model.TunnelState
+import ir.pnifox.core.vpn.DnsE2EResult
+import ir.pnifox.core.vpn.DnsE2EScanner
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.VpnController
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,9 @@ data class DnsUiState(
     val probeStatus: String? = null,
     val isProbing: Boolean = false,
     val isTestingPing: Boolean = false,
+    val e2eResults: List<DnsE2EResult> = emptyList(),
+    val isScanningE2e: Boolean = false,
+    val e2eScanProgress: String = "",
     val rxSpeedBps: Long = 0L,
     val txSpeedBps: Long = 0L,
     val sessionRxBytes: Long = 0L,
@@ -52,6 +57,9 @@ private data class DnsRuntimeFlags(
     val probeStatus: String? = null,
     val isProbing: Boolean = false,
     val isTestingPing: Boolean = false,
+    val e2eResults: List<DnsE2EResult> = emptyList(),
+    val isScanningE2e: Boolean = false,
+    val e2eScanProgress: String = "",
 )
 
 private data class DnsTrafficTuple(
@@ -103,6 +111,9 @@ class DnsViewModel @Inject constructor(
             probeStatus = rt.probeStatus,
             isProbing = rt.isProbing,
             isTestingPing = rt.isTestingPing,
+            e2eResults = rt.e2eResults,
+            isScanningE2e = rt.isScanningE2e,
+            e2eScanProgress = rt.e2eScanProgress,
             rxSpeedBps = traffic.rxSpeedBps,
             txSpeedBps = traffic.txSpeedBps,
             sessionRxBytes = traffic.sessionRxBytes,
@@ -284,6 +295,39 @@ class DnsViewModel @Inject constructor(
         val rcode = if (packet.length >= 4) (rxBuf[3].toInt() and 0x0F) else -1
         val ms = ((System.nanoTime() - startNs) / 1_000_000L).toInt().coerceAtLeast(1)
         ms to rcode
+    }
+
+    fun runE2eDnsScan(extraCsv: String = "") {
+        if (runtimeFlags.value.isScanningE2e) return
+        viewModelScope.launch {
+            runtimeFlags.value = runtimeFlags.value.copy(
+                isScanningE2e = true,
+                e2eScanProgress = "Scanning Port-53 resolvers (No ICMP)...",
+            )
+            val results = DnsE2EScanner.scanResolvers(extraIpsCsv = extraCsv) { done, total ->
+                runtimeFlags.value = runtimeFlags.value.copy(e2eScanProgress = "Scanned $done/$total resolvers (UDP/53)...")
+            }
+            val clean = results.count { it.isReachable && !it.isPoisoned }
+            val poisoned = results.count { it.isPoisoned }
+            logRingBuffer.append("DNS-E2E", LogLevel.INFO, "Port-53 E2E scan: $clean clean, $poisoned poisoned (10.10.34.x).")
+            runtimeFlags.value = runtimeFlags.value.copy(
+                isScanningE2e = false,
+                e2eResults = results,
+                e2eScanProgress = "Done: $clean clean, $poisoned poisoned",
+            )
+        }
+    }
+
+    fun applyScannedDnsIp(ip: String) {
+        viewModelScope.launch {
+            preferencesRepo.updateDnsSettings {
+                it.copy(mode = DnsTunnelMode.UDP, resolverAddress = "$ip:53")
+            }
+            preferencesRepo.updateGamingSettings {
+                it.copy(selectedDnsIp = ip)
+            }
+            runtimeFlags.value = runtimeFlags.value.copy(probeStatus = "Applied clean DNS $ip:53")
+        }
     }
 
     fun clearLogs() = logRingBuffer.clear()

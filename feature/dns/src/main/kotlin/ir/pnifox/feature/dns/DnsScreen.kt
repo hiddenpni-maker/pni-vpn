@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -391,6 +392,92 @@ fun DnsRoute(
                     if (!state.probeStatus.isNullOrBlank()) {
                         Spacer(Modifier.height(8.dp))
                         Text(state.probeStatus.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+
+            // Zero-ICMP Port-53 End-to-End Resolver Scanner (rejects 10.10.34.34-36 sinkholes)
+            item {
+                var customScanCsv by remember { mutableStateOf("") }
+                PnifoxCard(contentPadding = metrics.cardPadding) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            PnifoxSectionLabel(
+                                title = tr("Zero-ICMP Port-53 E2E Scanner", "اسکنر واقعی پورت ۵۳ (بدون پینگ ICMP)"),
+                            )
+                            Text(
+                                text = tr(
+                                    "Detects 10.10.34.x ISP DNS poisoning and ranks fastest healthy UDP/53 resolvers.",
+                                    "سرورهای مسموم (10.10.34.x) را شناسایی کرده و سالم‌ترین DNSهای پورت ۵۳ را پیدا می‌کند.",
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(
+                            onClick = { viewModel.runE2eDnsScan(customScanCsv) },
+                            enabled = !state.isScanningE2e,
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            if (state.isScanningE2e) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (state.isScanningE2e) tr("Scanning", "اسکن...") else tr("Scan Clean DNS", "اسکن DNS"))
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = customScanCsv,
+                        onValueChange = { customScanCsv = it },
+                        label = { Text(tr("Extra Custom IPs (comma-separated, optional)", "آی‌پی‌های دلخواه اضافه (با کاما)")) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (state.e2eScanProgress.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(state.e2eScanProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    if (state.e2eResults.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            state.e2eResults.forEach { res ->
+                                val statusColor = when {
+                                    res.isPoisoned -> Color(0xFFEF4444)
+                                    res.isReachable -> Color(0xFF10B981)
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("${res.label} (${res.ip})", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                text = if (isFa) res.statusNoteFa else res.statusNoteEn,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = statusColor,
+                                            )
+                                        }
+                                        if (res.isReachable) {
+                                            Text("${res.latencyMs}ms", style = MaterialTheme.typography.labelMedium, color = statusColor, fontWeight = FontWeight.Bold)
+                                        }
+                                        if (res.isReachable && !res.isPoisoned) {
+                                            Spacer(Modifier.width(6.dp))
+                                            OutlinedButton(
+                                                onClick = { viewModel.applyScannedDnsIp(res.ip) },
+                                                shape = RoundedCornerShape(8.dp),
+                                            ) {
+                                                Text(tr("Use", "اعمال"), style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

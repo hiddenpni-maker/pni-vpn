@@ -81,6 +81,12 @@ object IranPresetsCatalog {
         DnsResolverPreset("google_doh", "Google DoH", "گوگل DoH امن", "https://dns.google/dns-query", DnsTunnelMode.DOH, "HTTPS encrypted DNS", "ضد شنود DNS", "DoH"),
         DnsResolverPreset("cf_doh", "Cloudflare DoH", "کلودفلر DoH امن", "https://cloudflare-dns.com/dns-query", DnsTunnelMode.DOH, "Encrypted HTTPS port 443", "رمزنگاری HTTPS پورت ۴۴۳", "DoH"),
         DnsResolverPreset("cf_pdoq", "Cloudflare PDoQ", "کلودفلر PDoQ", "quic://dns.cloudflare.com", DnsTunnelMode.PDOQ, "QUIC low-latency DNS", "پاسخ سریع روی QUIC", "PDoQ"),
+        // Gaming & Anti-Sanction low-ping DNS presets
+        DnsResolverPreset("radar_game", "Radar Game Anti-Sanction", "رادار گیم (ضدتحریم)", "10.202.10.10:53", DnsTunnelMode.UDP, "Lowest ping for sanctioned games (COD/Valorant/FIFA)", "کمترین پینگ برای بازی‌های تحریمی (کالاف/ولورانت/فیفا)", "Game"),
+        DnsResolverPreset("begzar_game", "Begzar Anti-Sanction", "بگذر (ضدتحریم)", "185.55.226.26:53", DnsTunnelMode.UDP, "Stable anti-sanction routing without VPN tunnel", "عبور از تحریم بازی‌ها بدون افت سرعت", "Game"),
+        DnsResolverPreset("dns_403", "403 Online DNS", "DNS ضدتحریم ۴۰۳", "10.202.10.202:53", DnsTunnelMode.UDP, "Developer & gaming anti-sanction resolver", "مناسب بازی آنلاین و رفع تحریم سرویس‌ها", "Game"),
+        DnsResolverPreset("shecan_game", "Shecan Pro DNS", "شکن (ضدتحریم)", "178.22.122.100:53", DnsTunnelMode.UDP, "Classic Iranian anti-sanction resolver", "ضدتحریم پایدار بدون افزایش پینگ", "Game"),
+        DnsResolverPreset("electro_game", "Electro Team DNS", "الکترو گیم", "78.157.42.100:53", DnsTunnelMode.UDP, "Fast anti-sanction DNS for PC & mobile games", "مناسب گیم و استیم/اپیک با پینگ پایین", "Game"),
     )
 
     val carrierGuides: List<GuideTopic> = listOf(

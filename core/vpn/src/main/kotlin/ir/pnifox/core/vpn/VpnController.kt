@@ -143,11 +143,21 @@ class VpnController @Inject constructor(
     suspend fun refreshActiveRealDelay(): Int? {
         val connected = stateHolder.tunnelState.value as? TunnelState.Connected ?: return null
         val dns = preferencesRepo.dnsSettingsFlow.first()
+        val gaming = preferencesRepo.gamingSettingsFlow.first()
         val app = preferencesRepo.appSettingsFlow.first()
+        val effectiveDns = when {
+            connected.section == ActiveSectionEngine.DNS -> dns
+            connected.section == ActiveSectionEngine.GAMING && gaming.mode == ir.pnifox.core.model.GamingMode.DNS_ANTI_SANCTION ->
+                ir.pnifox.core.model.DnsTunnelSettings().copy(
+                    mode = ir.pnifox.core.model.DnsTunnelMode.UDP,
+                    resolverAddress = gaming.selectedDnsIp,
+                )
+            else -> null
+        }
         val rtt = realDelayProber.measureActiveTunnelDelayMs(
             engine = connected.engine,
             localSocksPort = connected.localSocksPort,
-            dnsSettings = if (connected.section == ActiveSectionEngine.DNS) dns else null,
+            dnsSettings = effectiveDns,
         )
         stateHolder.updateConnectedPing(rtt)
         if (connected.section == ActiveSectionEngine.SERVER && rtt != null) {
@@ -173,8 +183,9 @@ class VpnController @Inject constructor(
         val aetherSettings = preferencesRepo.aetherSettingsFlow.first()
         val dnsSettings = preferencesRepo.dnsSettingsFlow.first()
         val mhrSettings = preferencesRepo.mhrSettingsFlow.first()
+        val gamingSettings = preferencesRepo.gamingSettingsFlow.first()
         val profile = appSettings.activeProfileId?.let { dataRepo.getProfile(it) }
-        val engine = binaryRegistry.resolveEngineForSection(section, appSettings, aetherSettings, profile, dnsSettings)
+        val engine = binaryRegistry.resolveEngineForSection(section, appSettings, aetherSettings, profile, dnsSettings, gamingSettings)
 
         stateHolder.updateState(
             TunnelState.Connecting(
@@ -186,7 +197,7 @@ class VpnController @Inject constructor(
         )
         logs.append("Controller", LogLevel.INFO, "Checking native cores for ${section.titleEn}...")
 
-        val missing = binaryRegistry.verifyRequiredBinaries(section, appSettings, aetherSettings, profile, dnsSettings)
+        val missing = binaryRegistry.verifyRequiredBinaries(section, appSettings, aetherSettings, profile, dnsSettings, gamingSettings)
         if (missing != null) {
             logs.append("BinaryGuard", LogLevel.ERROR, "Missing binary: ${missing.expectedAbiPath}")
             stateHolder.updateState(TunnelState.Error(section, missing))
@@ -251,6 +262,14 @@ class VpnController @Inject constructor(
                         onStageUpdate = onStage,
                         onEndpointDiscovered = onDiscovered,
                     )
+                    ActiveSectionEngine.GAMING -> processManager.startGamingDaemon(
+                        gaming = gamingSettings,
+                        appSettings = appSettings,
+                        aetherSettings = aetherSettings,
+                        activeProfile = profile,
+                        onStageUpdate = onStage,
+                        onEndpointDiscovered = onDiscovered,
+                    )
                     ActiveSectionEngine.DNS -> processManager.startDnsSectionDaemon(
                         dnsSettings = dnsSettings,
                         appSettings = appSettings,
@@ -272,6 +291,12 @@ class VpnController @Inject constructor(
                 } else {
                     val endpoint = when (section) {
                         ActiveSectionEngine.AETHER -> "${discoveredIp ?: aetherSettings.endpointIp}:${discoveredPort ?: aetherSettings.endpointPort}"
+                        ActiveSectionEngine.GAMING -> when (gamingSettings.mode) {
+                            ir.pnifox.core.model.GamingMode.DNS_ANTI_SANCTION -> "Game DNS • ${gamingSettings.selectedDnsIp}"
+                            ir.pnifox.core.model.GamingMode.LOCAL_DPI_DESYNC -> "Local DPI Desync (0-Server)"
+                            ir.pnifox.core.model.GamingMode.AETHER_UDP_QUIC -> "Game WARP • ${discoveredIp ?: aetherSettings.endpointIp}"
+                            ir.pnifox.core.model.GamingMode.CUSTOM_SERVER -> "Game Server • ${profile?.name ?: "-"}"
+                        }
                         ActiveSectionEngine.SERVER -> "${profile!!.address}:${profile.port}"
                         ActiveSectionEngine.DNS -> when (dnsSettings.engineType) {
                             DnsEngineType.AUTO_TUNNEL -> "Auto DNS • ${dnsSettings.resolverAddress}"

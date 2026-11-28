@@ -1,4 +1,4 @@
-package ir.pnifox.feature.home
+﻿package ir.pnifox.feature.home
 
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -334,7 +334,7 @@ fun GamingRoute(
                         onCheckedChange = { c -> viewModel.updateGaming { it.copy(bypassIranGameTraffic = c) } },
                     )
                     PnifoxSwitchRow(
-                        title = tr("DNS Spy & Hijack Guard (WhiteGame)", "محافظ ضدجعل DNS حین بازی (الهام از WhiteGame)"),
+                        title = tr("DNS Spy & Hijack Guard", "محافظ ضدجعل DNS حین بازی"),
                         checked = state.gaming.enableDnsSpyOptimizer,
                         onCheckedChange = { c -> viewModel.updateGaming { it.copy(enableDnsSpyOptimizer = c) } },
                     )
@@ -490,3 +490,4 @@ fun GamingRoute(
         )
     }
 }
+

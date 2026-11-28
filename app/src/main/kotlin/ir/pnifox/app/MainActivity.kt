@@ -1,4 +1,4 @@
-package ir.pnifox.app
+﻿package ir.pnifox.app
 
 import android.Manifest
 import android.content.Intent
@@ -273,6 +273,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun PnifoxRootScreen(
     language: AppLanguage,
@@ -499,3 +500,4 @@ private fun FirstLaunchLanguageDialog(
         confirmButton = {},
     )
 }
+

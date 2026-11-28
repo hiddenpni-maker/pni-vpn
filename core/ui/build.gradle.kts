@@ -29,6 +29,7 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:shared"))
 
     implementation(platform(libs.androidx.compose.bom))
     api(libs.androidx.compose.ui)
@@ -40,3 +41,4 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+

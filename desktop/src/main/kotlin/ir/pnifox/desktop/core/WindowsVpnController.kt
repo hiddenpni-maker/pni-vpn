@@ -38,6 +38,7 @@ import ir.pnifox.core.vpn.JvmScanProgress
 import ir.pnifox.core.vpn.LocalDpiDesyncServer
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.MhrConfigBuilder
+import ir.pnifox.core.vpn.ConnectionStatusNarrator
 import ir.pnifox.core.vpn.RealDelaySocketProber
 import ir.pnifox.core.vpn.SniSpoofServer
 import ir.pnifox.desktop.model.WindowsBinaryStatus
@@ -285,9 +286,18 @@ class WindowsVpnController(
                             onDiscovered = { ip, port ->
                                 bypassIps += ip
                                 activeEndpointLabel = "$ip:$port"
-                                if (aether.scanForEndpoint || aether.endpointIp.isBlank()) {
-                                    logs.append("AETHER", LogLevel.INFO, "Discovered diverse endpoint $ip:$port (auto-scan stays enabled)")
+                                store.update { cur ->
+                                    cur.copy(
+                                        aetherSettings = cur.aetherSettings.copy(
+                                            endpointIp = ip,
+                                            endpointPort = port,
+                                            lastScannedEndpointIp = ip,
+                                            lastScannedEndpointPort = port,
+                                            scanForEndpoint = false,
+                                        ),
+                                    )
                                 }
+                                logs.append("AETHER", LogLevel.INFO, "Cached fastest endpoint $ip:$port for fast next connect")
                             },
                             onLastLine = { lastLogLine = it },
                         )
@@ -311,7 +321,7 @@ class WindowsVpnController(
                                 activeEndpointLabel = "Gaming QUIC v2 • WARP"
                                 val tuned = aether.copy(
                                     protocol = AetherProtocol.MASQUE,
-                                    masqueTransport = MasqueTransport.HTTP3,
+                                    masqueTransport = if (gaming.preferQuicV2H3) MasqueTransport.HTTP3 else MasqueTransport.HTTP2,
                                     quicV2Enabled = gaming.preferQuicV2H3,
                                     psiphonEnabled = false,
                                     torEnabled = false,
@@ -478,6 +488,9 @@ class WindowsVpnController(
                 }
 
                 val exposedSocksPort = if (isMhrProxyOnly) internalSocksPort else gatewaySocksPort
+                val activeDnsLabel = if (section == ActiveSectionEngine.GAMING) persisted.gamingSettings.selectedDnsIp else app.localDns.ifBlank { "1.1.1.1" }
+                val modeStr = if (persisted.windowsTunnelMode == WindowsTunnelMode.TUN_WINTUN) "Wintun VPN" else "System Proxy"
+                val netSummary = "$modeStr • DNS $activeDnsLabel" + if (app.bypassIranEnabled) " • Bypass IR" else ""
                 val connected = TunnelState.Connected(
                     section = section,
                     engine = engine,
@@ -486,6 +499,8 @@ class WindowsVpnController(
                     resolvedIp = bypassIps.firstOrNull().orEmpty(),
                     pingMs = profile?.lastPingMs,
                     connectedAtEpochMs = System.currentTimeMillis(),
+                    activeDnsSummary = activeDnsLabel,
+                    networkChangeSummary = netSummary,
                 )
                 _tunnelState.value = connected
 
@@ -495,6 +510,16 @@ class WindowsVpnController(
 
                 delay(800L)
                 refreshActiveRealDelay()
+                val exitPair = withContext(Dispatchers.IO) {
+                    RealDelaySocketProber.fetchExitIpViaSocks5("127.0.0.1", exposedSocksPort)
+                }
+                if (exitPair != null) {
+                    val cur = _tunnelState.value
+                    if (cur is TunnelState.Connected) {
+                        _tunnelState.value = cur.copy(exitIp = exitPair.first, exitLocation = exitPair.second)
+                        logs.append("ExitIP", LogLevel.INFO, "Connected Exit IP: ${exitPair.first} (${exitPair.second})")
+                    }
+                }
             }
         }
 
@@ -599,9 +624,16 @@ class WindowsVpnController(
                 detectedExitLocation.set(true)
             }
 
+            ConnectionStatusNarrator.fromLogLine(line)?.let { funStage ->
+                onStage(funStage.en, funStage.fa)
+            }
+            if (line.contains("tryDatastoreOpenDB", ignoreCase = true)) {
+                runCatching { File(store.aetherDir, "psiphon-cache").deleteRecursively() }
+            }
             if (line.contains("using gateway", ignoreCase = true) ||
                 line.contains("selected endpoint", ignoreCase = true) ||
-                line.contains("connected", ignoreCase = true)
+                line.contains("selected masque", ignoreCase = true) ||
+                line.contains("best gateway", ignoreCase = true)
             ) {
                 peerPattern.find(line)?.let { m ->
                     val ip = m.groupValues[1]

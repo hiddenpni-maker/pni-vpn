@@ -103,6 +103,7 @@ class AetherArgBuilder @Inject constructor() {
         psiphonServersDatPath: String? = null,
         routesFile: File? = null,
         exposeLocalHttpProxy: Boolean = false,
+        forceFreshScan: Boolean = false,
     ): List<String> = buildList {
         add("--config")
         add(File(workDir, "aether.toml").absolutePath)
@@ -279,16 +280,21 @@ class AetherArgBuilder @Inject constructor() {
         add("--ip")
         add(aether.ipVersion.cliValue)
 
-        if (aether.scanForEndpoint || aether.endpointIp.isBlank()) {
+        val cachedIp = aether.endpointIp.trim().ifBlank { aether.lastScannedEndpointIp.trim() }
+        val cachedPort = if (aether.endpointIp.isNotBlank()) aether.endpointPort else aether.lastScannedEndpointPort
+        val shouldScanFresh = forceFreshScan || cachedIp.isBlank()
+        if (shouldScanFresh) {
             add("--scan")
             add(aether.scanMode.cliValue)
-            add("--no-quick-reconnect")
+            if (forceFreshScan) {
+                add("--no-quick-reconnect")
+            }
             if (usesMasque) {
                 add("--startup-secs")
                 add("20")
             }
         } else {
-            val peerSpec = "${aether.endpointIp.trim()}:${aether.endpointPort}"
+            val peerSpec = "$cachedIp:$cachedPort"
             when (effectiveProto) {
                 AetherProtocol.MASQUE -> {
                     add("--peer")

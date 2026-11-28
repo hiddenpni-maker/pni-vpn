@@ -96,15 +96,23 @@ private enum class BottomTab(
     val labelFa: String,
     val icon: ImageVector,
 ) {
-    AETHER("aether", "AETHER", "وارپ", Icons.Rounded.Bolt),
-    GAMING("gaming", "Gaming", "گیم", Icons.Rounded.SportsEsports),
+    HUB("hub", "Unblock", "رفع فیلتر", Icons.Rounded.Bolt),
     SERVERS("servers", "Servers", "سرورها", Icons.Rounded.Storage),
-    MHR("mhr", "MHR", "MHR", Icons.Rounded.Shield),
     DNS("dns", "DNS", "DNS", Icons.Rounded.Dns),
     SCANNER("scanner", "Scan", "اسکنر", Icons.Rounded.Radar),
+    STATS("stats", "Stats", "مصرف", Icons.Rounded.BarChart),
 }
 
-private const val ROUTE_STATS = "stats"
+private enum class HubSubSection(
+    val labelEn: String,
+    val labelFa: String,
+    val icon: ImageVector,
+) {
+    UNBLOCK("Unblock", "رفع فیلتر", Icons.Rounded.Bolt),
+    GAMING("Gaming", "گیمینگ", Icons.Rounded.SportsEsports),
+    MHR("MHR Relay", "رله MHR", Icons.Rounded.Shield),
+}
+
 private const val ROUTE_SETTINGS = "settings"
 
 @AndroidEntryPoint
@@ -273,7 +281,8 @@ private fun PnifoxRootScreen(
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = currentRoute != ROUTE_SETTINGS && currentRoute != ROUTE_STATS
+    val showBottomBar = currentRoute != ROUTE_SETTINGS
+    var activeHubSection by remember { mutableStateOf(HubSubSection.UNBLOCK) }
 
     val navigateToTab: (String) -> Unit = { route ->
         navController.navigate(route) {
@@ -286,14 +295,22 @@ private fun PnifoxRootScreen(
     }
 
     val navigateBySection: (ActiveSectionEngine) -> Unit = { sec ->
-        val dest = when (sec) {
-            ActiveSectionEngine.AETHER -> BottomTab.AETHER.route
-            ActiveSectionEngine.GAMING -> BottomTab.GAMING.route
-            ActiveSectionEngine.SERVER -> BottomTab.SERVERS.route
-            ActiveSectionEngine.MHR -> BottomTab.MHR.route
-            ActiveSectionEngine.DNS -> BottomTab.DNS.route
+        when (sec) {
+            ActiveSectionEngine.AETHER -> {
+                activeHubSection = HubSubSection.UNBLOCK
+                navigateToTab(BottomTab.HUB.route)
+            }
+            ActiveSectionEngine.GAMING -> {
+                activeHubSection = HubSubSection.GAMING
+                navigateToTab(BottomTab.HUB.route)
+            }
+            ActiveSectionEngine.MHR -> {
+                activeHubSection = HubSubSection.MHR
+                navigateToTab(BottomTab.HUB.route)
+            }
+            ActiveSectionEngine.SERVER -> navigateToTab(BottomTab.SERVERS.route)
+            ActiveSectionEngine.DNS -> navigateToTab(BottomTab.DNS.route)
         }
-        navigateToTab(dest)
     }
 
     Scaffold(
@@ -321,29 +338,53 @@ private fun PnifoxRootScreen(
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = BottomTab.AETHER.route,
+            startDestination = BottomTab.HUB.route,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            composable(BottomTab.AETHER.route) {
-                HomeRoute(
-                    onNavigateServers = { navigateToTab(BottomTab.SERVERS.route) },
-                    onNavigateScanner = { navigateToTab(BottomTab.SCANNER.route) },
-                    onNavigateDns = { navigateToTab(BottomTab.DNS.route) },
-                    onNavigateSettings = { navController.navigate(ROUTE_SETTINGS) },
-                    onNavigateStats = { navController.navigate(ROUTE_STATS) },
-                    onNavigateSection = navigateBySection,
-                    onOpenTelegram = onOpenTelegram,
-                )
-            }
-            composable(BottomTab.GAMING.route) {
-                GamingRoute(
-                    onNavigateSection = navigateBySection,
-                    onNavigateServers = { navigateToTab(BottomTab.SERVERS.route) },
-                    onNavigateSettings = { navController.navigate(ROUTE_SETTINGS) },
-                    onOpenTelegram = onOpenTelegram,
-                )
+            composable(BottomTab.HUB.route) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Compact unified section switcher list (رفع فیلتر | گیمینگ | رله MHR)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        HubSubSection.entries.forEach { sub ->
+                            val isSelected = activeHubSection == sub
+                            val lbl = if (language == AppLanguage.PERSIAN) sub.labelFa else sub.labelEn
+                            androidx.compose.material3.FilterChip(
+                                selected = isSelected,
+                                onClick = { activeHubSection = sub },
+                                leadingIcon = { Icon(sub.icon, null, modifier = Modifier.size(16.dp)) },
+                                label = { Text(lbl, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                    androidx.compose.foundation.layout.Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        when (activeHubSection) {
+                            HubSubSection.UNBLOCK -> HomeRoute(
+                                onNavigateServers = { navigateToTab(BottomTab.SERVERS.route) },
+                                onNavigateScanner = { navigateToTab(BottomTab.SCANNER.route) },
+                                onNavigateDns = { navigateToTab(BottomTab.DNS.route) },
+                                onNavigateSettings = { navController.navigate(ROUTE_SETTINGS) },
+                                onNavigateStats = { navigateToTab(BottomTab.STATS.route) },
+                                onNavigateSection = navigateBySection,
+                                onOpenTelegram = onOpenTelegram,
+                            )
+                            HubSubSection.GAMING -> GamingRoute(
+                                onNavigateSection = navigateBySection,
+                                onNavigateServers = { navigateToTab(BottomTab.SERVERS.route) },
+                                onNavigateSettings = { navController.navigate(ROUTE_SETTINGS) },
+                                onOpenTelegram = onOpenTelegram,
+                            )
+                            HubSubSection.MHR -> MhrRoute()
+                        }
+                    }
+                }
             }
             composable(BottomTab.SERVERS.route) {
                 ServersRoute(
@@ -351,16 +392,13 @@ private fun PnifoxRootScreen(
                     onNavigateDns = { navigateToTab(BottomTab.DNS.route) },
                 )
             }
-            composable(BottomTab.MHR.route) {
-                MhrRoute()
-            }
             composable(BottomTab.SCANNER.route) {
                 ScannerRoute()
             }
             composable(BottomTab.DNS.route) {
                 DnsRoute(onNavigateScanner = { navigateToTab(BottomTab.SCANNER.route) })
             }
-            composable(ROUTE_STATS) {
+            composable(BottomTab.STATS.route) {
                 StatsRoute()
             }
             composable(ROUTE_SETTINGS) {

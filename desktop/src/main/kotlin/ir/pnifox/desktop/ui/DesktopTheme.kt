@@ -650,7 +650,11 @@ fun DesktopTelemetryBar(
     isConnected: Boolean,
     isTestingPing: Boolean,
     onRetestPing: () -> Unit,
+    exitIp: String = "",
+    exitLocation: String = "",
+    networkChangeSummary: String = "",
 ) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -698,6 +702,41 @@ fun DesktopTelemetryBar(
                 }
             }
         }
+    }
+    if (isConnected && (exitIp.isNotBlank() || networkChangeSummary.isNotBlank())) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (exitIp.isNotBlank()) {
+                    Text(
+                        text = dtr("Connected IP: ", "آی‌پی اتصال: ") + if (exitLocation.isNotBlank()) "$exitIp ($exitLocation)" else exitIp,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF10B981),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (networkChangeSummary.isNotBlank()) {
+                    Text(
+                        text = dtr("Changes: ", "تغییرات شبکه: ") + networkChangeSummary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
     }
 }
 

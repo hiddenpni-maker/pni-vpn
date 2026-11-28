@@ -35,7 +35,9 @@ data class ScannerUiState(
     val provider: ScanProvider = ScanProvider.CLOUDFLARE,
     val scanStyle: ScanStyle = ScanStyle.TURBO_FAST,
     val port: Int = 443,
+    val portText: String = "443",
     val candidateCount: Int = 80,
+    val candidateCountText: String = "80",
     val sniHost: String = "speed.cloudflare.com",
     val gentleMode: Boolean = true,
     val enableTlsAndSpeedTest: Boolean = true,
@@ -54,7 +56,9 @@ private data class ScanConfigState(
     val provider: ScanProvider = ScanProvider.CLOUDFLARE,
     val scanStyle: ScanStyle = ScanStyle.TURBO_FAST,
     val port: Int = 443,
+    val portText: String = "443",
     val candidateCount: Int = 80,
+    val candidateCountText: String = "80",
     val sniHost: String = ScanProvider.CLOUDFLARE.defaultSni,
     val gentleMode: Boolean = true,
     val enableTlsAndSpeedTest: Boolean = true,
@@ -101,7 +105,9 @@ class ScannerViewModel @Inject constructor(
             provider = rt.provider,
             scanStyle = rt.scanStyle,
             port = rt.port,
+            portText = rt.portText,
             candidateCount = rt.candidateCount,
+            candidateCountText = rt.candidateCountText,
             sniHost = rt.sniHost,
             gentleMode = rt.gentleMode,
             enableTlsAndSpeedTest = rt.enableTlsAndSpeedTest,
@@ -127,21 +133,36 @@ class ScannerViewModel @Inject constructor(
             provider = provider,
             sniHost = provider.defaultSni,
             port = nextPort,
+            portText = nextPort.toString(),
             statusNote = null,
         )
     }
 
-    fun setPort(portText: String) {
-        val parsed = portText.toIntOrNull()?.coerceIn(1, 65535) ?: return
-        cfg.value = cfg.value.copy(port = parsed)
+    fun setPort(rawText: String) {
+        val digits = rawText.filter { it.isDigit() }.take(5)
+        val parsed = digits.toIntOrNull()?.coerceIn(1, 65535)
+        cfg.value = cfg.value.copy(
+            portText = digits,
+            port = parsed ?: cfg.value.port,
+        )
     }
 
     fun setScanStyle(style: ScanStyle) {
         cfg.value = cfg.value.copy(scanStyle = style)
     }
 
+    fun setCandidateCountText(rawText: String) {
+        val digits = rawText.filter { it.isDigit() }.take(4)
+        val parsed = digits.toIntOrNull()?.coerceIn(10, 500)
+        cfg.value = cfg.value.copy(
+            candidateCountText = digits,
+            candidateCount = parsed ?: cfg.value.candidateCount,
+        )
+    }
+
     fun setCandidateCount(count: Int) {
-        cfg.value = cfg.value.copy(candidateCount = count.coerceIn(20, 250))
+        val c = count.coerceIn(10, 500)
+        cfg.value = cfg.value.copy(candidateCount = c, candidateCountText = c.toString())
     }
 
     fun setSniHost(sni: String) {
@@ -175,12 +196,14 @@ class ScannerViewModel @Inject constructor(
         scanJob = viewModelScope.launch {
             cfg.value = snapshot.copy(isScanning = true, progressLabel = "Sampling diverse subnets...", statusNote = null)
             val candidates = loadCandidateIps(snapshot.provider, snapshot.candidateCount)
+            val effectivePort = if (snapshot.provider == ScanProvider.AKAMAI) 443 else (snapshot.portText.toIntOrNull()?.coerceIn(1, 65535) ?: 443)
             val ports = when {
+                snapshot.provider == ScanProvider.AKAMAI -> listOf(443)
                 snapshot.provider == ScanProvider.WARP && snapshot.scanStyle == ScanStyle.DEEP_MULTIPORT ->
                     listOf(443, 8443, 4443, 2408)
                 snapshot.scanStyle == ScanStyle.DEEP_MULTIPORT ->
-                    (listOf(snapshot.port) + snapshot.scanStyle.ports).distinct()
-                else -> listOf(snapshot.port)
+                    (listOf(effectivePort) + snapshot.scanStyle.ports).distinct()
+                else -> listOf(effectivePort)
             }
             val rawResults = JvmCdnScanner.scanCandidates(
                 ips = candidates,
@@ -190,6 +213,7 @@ class ScannerViewModel @Inject constructor(
                 style = snapshot.scanStyle,
                 testTls = snapshot.enableTlsAndSpeedTest,
                 measureColoAndSpeed = snapshot.enableTlsAndSpeedTest,
+                gentleMode = snapshot.gentleMode,
                 onProgress = { p ->
                     cfg.value = cfg.value.copy(progressLabel = "Probed ${p.tested}/${p.total} • Clean: ${p.healthy}")
                 },

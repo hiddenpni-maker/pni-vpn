@@ -370,9 +370,9 @@ fun AetherDesktopTab(
                         ) {
                             DesktopDropdownButton(
                                 label = dtr("Transport", "انتقال"),
-                                selectedText = aether.masqueTransport.label,
-                                options = MasqueTransport.entries,
-                                selectedItem = aether.masqueTransport,
+                                selectedText = MasqueTransport.HTTP2.label,
+                                options = listOf(MasqueTransport.HTTP2),
+                                selectedItem = MasqueTransport.HTTP2,
                                 optionLabel = { it.label },
                                 onSelect = { tr -> holder.updateAether { it.copy(masqueTransport = tr) } },
                                 icon = Icons.Rounded.SwapHoriz,

@@ -208,16 +208,20 @@ fun DnsRoute(
 
             // Live Download / Upload Speed + Real Ping Row
             item {
+                val dConnected = state.tunnelState as? TunnelState.Connected
                 TunnelTelemetryRow(
                     rxSpeedBps = if (dnsConnected) state.rxSpeedBps else 0L,
                     txSpeedBps = if (dnsConnected) state.txSpeedBps else 0L,
                     sessionRxBytes = if (dnsConnected) state.sessionRxBytes else 0L,
                     sessionTxBytes = if (dnsConnected) state.sessionTxBytes else 0L,
-                    pingMs = if (dnsConnected) (state.tunnelState as? TunnelState.Connected)?.pingMs else null,
+                    pingMs = if (dnsConnected) dConnected?.pingMs else null,
                     modeLabel = if (isFa) state.settings.engineType.labelFa else state.settings.engineType.labelEn,
                     isConnectedForSection = dnsConnected,
                     isTestingPing = state.isTestingPing,
                     onRetestPing = viewModel::testActiveRealPing,
+                    exitIp = if (dnsConnected) dConnected?.exitIp.orEmpty() else "",
+                    exitLocation = if (dnsConnected) dConnected?.exitLocation.orEmpty() else "",
+                    networkChangeSummary = if (dnsConnected) dConnected?.networkChangeSummary.orEmpty() else "",
                 )
             }
 
@@ -351,27 +355,21 @@ fun DnsRoute(
                 }
             }
 
-            // UDP | SuperDNS | FastDNS | PDoQ | DoH | DoT
+            // Consolidated DNS Protocol List (UDP / SuperDNS / FastDNS / PDoQ / DoH / DoT)
             item {
                 PnifoxCard(contentPadding = metrics.cardPadding) {
-                    PnifoxSectionLabel(title = tr("DNS Protocol / Mode", "پروتکل DNS"))
+                    PnifoxSectionLabel(title = tr("DNS Protocol List", "لیست پروتکل‌های DNS (UDP / SuperDNS / DoH)"))
                     Spacer(Modifier.height(8.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        DnsTunnelMode.entries.forEach { mode ->
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (state.settings.mode == mode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                                border = BorderStroke(1.dp, if (state.settings.mode == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
-                                modifier = Modifier.clickable { viewModel.setMode(mode) },
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                                    RadioButton(selected = state.settings.mode == mode, onClick = { viewModel.setMode(mode) }, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(mode.label, style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
-                    }
+                    ir.pnifox.core.ui.PnifoxDropdownField(
+                        label = tr("Protocol", "پروتکل DNS"),
+                        selectedText = "${state.settings.mode.label} — ${if (isFa) state.settings.mode.subtitleFa else state.settings.mode.subtitleEn}",
+                        options = DnsTunnelMode.entries,
+                        selectedItem = state.settings.mode,
+                        optionLabel = { m -> "${m.label} — ${if (isFa) m.subtitleFa else m.subtitleEn}" },
+                        onSelect = viewModel::setMode,
+                        icon = Icons.Rounded.Dns,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = state.settings.resolverAddress,

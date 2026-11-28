@@ -18,6 +18,9 @@ import ir.pnifox.core.model.ScenarioGoalId
 import ir.pnifox.core.model.ScenarioProfile
 import ir.pnifox.core.model.TunnelState
 import ir.pnifox.core.vpn.DnsE2EScanner
+import ir.pnifox.core.vpn.DnsSpyProbeResult
+import ir.pnifox.core.vpn.GameLivePingResult
+import ir.pnifox.core.vpn.WhiteGameOptimizer
 import ir.pnifox.core.vpn.LogEntry
 import ir.pnifox.core.vpn.LogRingBuffer
 import ir.pnifox.core.vpn.VpnController
@@ -38,6 +41,10 @@ data class GamingUiState(
     val isTestingDnsPing: Boolean = false,
     val dnsPingMap: Map<String, Int?> = emptyMap(),
     val isTestingActivePing: Boolean = false,
+    val isRunningDnsSpy: Boolean = false,
+    val dnsSpyResults: List<DnsSpyProbeResult> = emptyList(),
+    val isProbingGames: Boolean = false,
+    val gameCatalogResults: List<GameLivePingResult> = emptyList(),
     val rxSpeedBps: Long = 0L,
     val txSpeedBps: Long = 0L,
     val sessionRxBytes: Long = 0L,
@@ -49,6 +56,10 @@ private data class GamingRuntimeFlags(
     val isTestingDnsPing: Boolean = false,
     val dnsPingMap: Map<String, Int?> = emptyMap(),
     val isTestingActivePing: Boolean = false,
+    val isRunningDnsSpy: Boolean = false,
+    val dnsSpyResults: List<DnsSpyProbeResult> = emptyList(),
+    val isProbingGames: Boolean = false,
+    val gameCatalogResults: List<GameLivePingResult> = emptyList(),
 )
 
 private data class GamingTrafficTuple(
@@ -105,6 +116,10 @@ class GamingViewModel @Inject constructor(
             isTestingDnsPing = rt.isTestingDnsPing,
             dnsPingMap = rt.dnsPingMap,
             isTestingActivePing = rt.isTestingActivePing,
+            isRunningDnsSpy = rt.isRunningDnsSpy,
+            dnsSpyResults = rt.dnsSpyResults,
+            isProbingGames = rt.isProbingGames,
+            gameCatalogResults = rt.gameCatalogResults,
             rxSpeedBps = tr.rxSpeedBps,
             txSpeedBps = tr.txSpeedBps,
             sessionRxBytes = tr.sessionRxBytes,
@@ -190,6 +205,24 @@ class GamingViewModel @Inject constructor(
             if (autoConnect) {
                 vpnController.startConnection(profile.recommendedSection)
             }
+        }
+    }
+
+    fun runDnsSpyOptimizer() {
+        if (rtFlags.value.isRunningDnsSpy) return
+        viewModelScope.launch {
+            rtFlags.value = rtFlags.value.copy(isRunningDnsSpy = true)
+            val res = WhiteGameOptimizer.runDnsSpyScan()
+            rtFlags.value = rtFlags.value.copy(isRunningDnsSpy = false, dnsSpyResults = res)
+        }
+    }
+
+    fun runGameCatalogPing() {
+        if (rtFlags.value.isProbingGames) return
+        viewModelScope.launch {
+            rtFlags.value = rtFlags.value.copy(isProbingGames = true)
+            val res = WhiteGameOptimizer.probeGameCatalog()
+            rtFlags.value = rtFlags.value.copy(isProbingGames = false, gameCatalogResults = res)
         }
     }
 

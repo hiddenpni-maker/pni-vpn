@@ -209,18 +209,22 @@ fun GamingRoute(
                 }
             }
 
-            // Telemetry
+            // Telemetry + Connected IP & Active Network Changes
             item {
+                val gConnected = state.tunnelState as? TunnelState.Connected
                 TunnelTelemetryRow(
                     rxSpeedBps = if (gamingConnected) state.rxSpeedBps else 0L,
                     txSpeedBps = if (gamingConnected) state.txSpeedBps else 0L,
                     sessionRxBytes = if (gamingConnected) state.sessionRxBytes else 0L,
                     sessionTxBytes = if (gamingConnected) state.sessionTxBytes else 0L,
-                    pingMs = if (gamingConnected) (state.tunnelState as? TunnelState.Connected)?.pingMs else null,
+                    pingMs = if (gamingConnected) gConnected?.pingMs else null,
                     modeLabel = if (isFa) state.appSettings.connectionMode.labelFa else state.appSettings.connectionMode.labelEn,
                     isConnectedForSection = gamingConnected,
                     isTestingPing = state.isTestingActivePing,
                     onRetestPing = viewModel::testActivePing,
+                    exitIp = if (gamingConnected) gConnected?.exitIp.orEmpty() else "",
+                    exitLocation = if (gamingConnected) gConnected?.exitLocation.orEmpty() else "",
+                    networkChangeSummary = if (gamingConnected) gConnected?.networkChangeSummary.orEmpty() else "",
                 )
             }
 
@@ -330,10 +334,148 @@ fun GamingRoute(
                         onCheckedChange = { c -> viewModel.updateGaming { it.copy(bypassIranGameTraffic = c) } },
                     )
                     PnifoxSwitchRow(
-                        title = tr("QUIC v2 on WARP Gaming", "استفاده از QUIC v2 در تانل گیم"),
-                        checked = state.gaming.preferQuicV2H3,
-                        onCheckedChange = { c -> viewModel.updateGaming { it.copy(preferQuicV2H3 = c) } },
+                        title = tr("DNS Spy & Hijack Guard (WhiteGame)", "محافظ ضدجعل DNS حین بازی (الهام از WhiteGame)"),
+                        checked = state.gaming.enableDnsSpyOptimizer,
+                        onCheckedChange = { c -> viewModel.updateGaming { it.copy(enableDnsSpyOptimizer = c) } },
                     )
+                    PnifoxSwitchRow(
+                        title = tr("Private DNS (No IP Registration)", "استفاده از DNS پرایوت بدون ثبت IP"),
+                        checked = state.gaming.usePrivateDnsNoReg,
+                        onCheckedChange = { c -> viewModel.updateGaming { it.copy(usePrivateDnsNoReg = c) } },
+                    )
+                }
+            }
+
+            // WhiteGame-inspired DNS Spy Optimizer & Game Publisher Live Ping Catalog
+            item {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                PnifoxCard(contentPadding = metrics.cardPadding) {
+                    PnifoxSectionLabel(
+                        title = tr("DNS Spy & Game Optimizer", "بهینه‌ساز DNS Spy و پینگ بازی‌ها"),
+                        trailing = {
+                            PnifoxInfoPopupButton(
+                                title = tr("How to Use Game Optimizer", "راهنمای استفاده از بهینه‌ساز بازی"),
+                                body = tr(
+                                    "1. Tap 'DNS Spy' to detect hijacked ISP DNS (10.10.34.x) and rank clean gaming DNS without IP registration.\n2. Tap 'Use' on the fastest clean DNS (Radar, Electro, 403, Shecan).\n3. Tap 'Test Games' to measure live TLS delay for COD Mobile, Steam, Valorant & PUBG.\n4. Tap 'Ignore Battery Limits' so Android never kills your game tunnel.",
+                                    "۱. دکمه «اسکن DNS Spy» را بزنید تا DNSهای مسموم/جعل‌شده (10.10.34.x) شناسایی و سریع‌ترین DNS سالم بدون نیاز به ثبت IP پیدا شود.\n۲. روی سریع‌ترین DNS سالم (رادار، الکترو، ۴۰۳، شکن) دکمه «اعمال» را بزنید.\n۳. برای تست پینگ زنده بازی‌ها (کالاف، استیم، ولورانت، پابجی) دکمه «تست بازی‌ها» را بزنید.\n۴. برای جلوگیری از قطع شدن در پس‌زمینه، «نادیده گرفتن باتری» را فعال کنید.\n۵. برای بازی با پنل‌های Cloud و BPB، کانفیگ را در تب سرورها وارد و حالت «سرور گیمینگ اختصاصی» را انتخاب کنید.",
+                                ),
+                            )
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = viewModel::runDnsSpyOptimizer,
+                            enabled = !state.isRunningDnsSpy,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = if (state.isRunningDnsSpy) tr("Scanning...", "در حال اسکن...") else tr("DNS Spy", "اسکن DNS Spy"),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = viewModel::runGameCatalogPing,
+                            enabled = !state.isProbingGames,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = if (state.isProbingGames) tr("Testing...", "در حال تست...") else tr("Test Games", "تست بازی‌ها"),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = android.net.Uri.parse("package:${ctx.packageName}")
+                                }
+                                ctx.startActivity(intent)
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = tr("Ignore Battery Restrictions (Android Booster)", "نادیده گرفتن محدودیت باتری (پایداری حین بازی)"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    if (state.dnsSpyResults.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            state.dnsSpyResults.take(6).forEach { r ->
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "${if (isFa) r.resolver.nameFa else r.resolver.nameEn} (${r.resolver.ip})",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = if (isFa) r.statusNoteFa else r.statusNoteEn,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (r.hijacked || r.latencyMs == null) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color(0xFF10B981),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        if (!r.hijacked && r.latencyMs != null) {
+                                            OutlinedButton(
+                                                onClick = { viewModel.updateGaming { it.copy(selectedDnsIp = r.resolver.ip) } },
+                                                shape = RoundedCornerShape(8.dp),
+                                            ) {
+                                                Text(tr("Use", "اعمال"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (state.gameCatalogResults.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            state.gameCatalogResults.forEach { g ->
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(g.game.title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text("${g.game.genre} • ${g.game.region}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                        }
+                                        Text(
+                                            text = g.latencyMs?.let { "${it}ms • Loss ${g.lossPct}%" } ?: tr("Unreachable", "غیرقابل دسترس"),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (g.isGoodForGaming) androidx.compose.ui.graphics.Color(0xFF10B981) else MaterialTheme.colorScheme.error,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

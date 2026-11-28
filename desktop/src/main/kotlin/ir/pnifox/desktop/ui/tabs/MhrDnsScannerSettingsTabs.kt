@@ -504,15 +504,14 @@ fun DnsDesktopTab(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DnsTunnelMode.entries.forEach { m ->
-                        FilterChip(
-                            selected = dns.mode == m,
-                            onClick = { holder.updateDns { it.copy(mode = m) } },
-                            label = { Text(m.label) },
-                        )
-                    }
-                }
+                DesktopDropdownButton(
+                    label = dtr("DNS Protocol", "پروتکل DNS"),
+                    selectedText = "${dns.mode.label} — ${if (isFa) dns.mode.subtitleFa else dns.mode.subtitleEn}",
+                    options = DnsTunnelMode.entries,
+                    selectedItem = dns.mode,
+                    optionLabel = { m -> "${m.label} — ${if (isFa) m.subtitleFa else m.subtitleEn}" },
+                    onSelect = { m -> holder.updateDns { it.copy(mode = m) } },
+                )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = dns.resolverAddress,

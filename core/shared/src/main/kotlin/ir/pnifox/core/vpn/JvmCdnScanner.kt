@@ -60,6 +60,21 @@ object JvmCdnScanner {
         val singles = mutableListOf<String>()
         val cidrEntries = mutableListOf<Triple<Long, Int, Long>>()
         for (token in cleaned.shuffled(Random)) {
+            if (token.contains('-') && !token.contains('/')) {
+                val startLong = ipToLong(token.substringBefore('-').trim())
+                val endLong = ipToLong(token.substringAfter('-').trim())
+                if (startLong != null && endLong != null && endLong >= startLong) {
+                    val count = (endLong - startLong + 1L).coerceAtMost(maxSamples.toLong() * 2L)
+                    val step = ((endLong - startLong + 1L) / count.coerceAtLeast(1L)).coerceAtLeast(1L)
+                    var cur = startLong
+                    while (cur <= endLong && singles.size < maxSamples * 2) {
+                        val ipStr = longToIp(cur)
+                        if (ipStr !in excludeIps) singles += ipStr
+                        cur += step
+                    }
+                }
+                continue
+            }
             if (!token.contains('/')) {
                 if (isIpv4(token) && token !in excludeIps) singles += token
                 continue
@@ -122,6 +137,7 @@ object JvmCdnScanner {
         style: ScanStyle = ScanStyle.TURBO_FAST,
         testTls: Boolean = true,
         measureColoAndSpeed: Boolean = false,
+        gentleMode: Boolean = false,
         excludeIps: Set<String> = emptySet(),
         onProgress: (JvmScanProgress) -> Unit = {},
         onResult: (JvmScanCandidateResult) -> Unit = {},
@@ -138,7 +154,8 @@ object JvmCdnScanner {
         val total = candidates.size
         val phase1Tested = AtomicInteger(0)
         val healthyCount = AtomicInteger(0)
-        val quickSem = Semaphore(style.concurrency.coerceIn(8, 96))
+        val phase1Workers = if (gentleMode) 6 else style.concurrency.coerceIn(8, 96)
+        val quickSem = Semaphore(phase1Workers)
 
         // Phase 1: Ultra-fast parallel reachability screen
         val alive = coroutineScope {
@@ -157,7 +174,7 @@ object JvmCdnScanner {
         if (alive.isEmpty()) return@withContext emptyList()
 
         // Phase 2: Deep multi-sample RTT + TLS/SNI + speed/colo on surviving live candidates
-        val deepSem = Semaphore(24)
+        val deepSem = Semaphore(if (gentleMode) 4 else 24)
         val results = coroutineScope {
             alive.sortedBy { it.third }.map { (ip, port, firstRtt) ->
                 async {
@@ -268,9 +285,15 @@ object JvmCdnScanner {
                             if (totalRead > 0) {
                                 speedKbps = ((totalRead / 1024.0) / (elapsedMs / 1000.0)).toInt().coerceAtLeast(1)
                             }
+                            val hdr = preview.toString()
                             Regex("cf-ray:\\s*[0-9a-fA-F]+-([A-Z]{3})", RegexOption.IGNORE_CASE)
-                                .find(preview.toString())
+                                .find(hdr)
                                 ?.let { colo = it.groupValues[1] }
+                            if (colo.isBlank() && (hdr.contains("AkamaiGHost", true) || hdr.contains("x-akamai", true))) {
+                                colo = "Akamai"
+                            } else if (colo.isBlank() && hdr.contains("fastly", true)) {
+                                colo = "Fastly"
+                            }
                         }
                     }
                 }
@@ -333,4 +356,14 @@ object JvmCdnScanner {
 
     private fun longToIp(v: Long): String =
         "${(v ushr 24) and 0xFF}.${(v ushr 16) and 0xFF}.${(v ushr 8) and 0xFF}.${v and 0xFF}"
+
+    fun exportResultsTxt(results: List<JvmScanCandidateResult>): String =
+        results.joinToString("\n") { it.ip }
+
+    fun exportResultsCsv(results: List<JvmScanCandidateResult>): String = buildString {
+        appendLine("IP,Port,LatencyMs,JitterMs,LossPct,TlsMs,DownloadKbps,Colo,Grade")
+        results.forEach { r ->
+            appendLine("${r.ip},${r.port},${r.latencyMs},${r.jitterMs},${r.lossPct.toInt()},${r.tlsHandshakeMs ?: ""},${r.downloadSpeedKbps},${r.colo},${r.grade}")
+        }
+    }
 }

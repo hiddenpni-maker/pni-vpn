@@ -45,6 +45,7 @@ import ir.pnifox.core.model.ActiveSectionEngine
 import ir.pnifox.core.model.AppLanguage
 import ir.pnifox.core.model.RecoveryAction
 import ir.pnifox.core.model.TunnelState
+import ir.pnifox.core.vpn.ConnectionStatusNarrator
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -117,20 +118,25 @@ fun FoxConnectionMascot(
             Column(modifier = Modifier.weight(1f)) {
                 val (headline, subline, accent) = when (effectiveState) {
                     is TunnelState.Connecting -> Triple(
-                        if (isFa) effectiveState.stageLabelFa else effectiveState.stageLabelEn,
+                        ConnectionStatusNarrator.headlineForState(effectiveState, isFa),
                         tr("Target: ${effectiveState.targetLabel}", "مقصد: ${effectiveState.targetLabel}"),
                         Color(0xFFF97316),
                     )
                     is TunnelState.Connected -> Triple(
-                        if (isFa) "متصل (${effectiveState.engine.displayFa})" else "Connected (${effectiveState.engine.displayEn})",
+                        ConnectionStatusNarrator.headlineForState(effectiveState, isFa),
                         buildString {
-                            append("SOCKS5 127.0.0.1:${effectiveState.localSocksPort}")
+                            if (effectiveState.exitIp.isNotBlank()) {
+                                append("IP: ${effectiveState.exitIp}")
+                                if (effectiveState.exitLocation.isNotBlank()) append(" (${effectiveState.exitLocation})")
+                            } else {
+                                append("SOCKS5 127.0.0.1:${effectiveState.localSocksPort}")
+                            }
                             effectiveState.pingMs?.let { append(" • ${it}ms") }
                         },
                         Color(0xFF10B981),
                     )
                     is TunnelState.Error -> Triple(
-                        if (isFa) effectiveState.error.titleFa else effectiveState.error.titleEn,
+                        ConnectionStatusNarrator.headlineForState(effectiveState, isFa),
                         tr("See diagnosis & quick fixes below", "علت خطا و راه‌حل پیشنهادی"),
                         Color(0xFFEF4444),
                     )
@@ -143,8 +149,8 @@ fun FoxConnectionMascot(
                             )
                         } else {
                             Triple(
-                                tr("Ready — Tap to Connect", "آماده اتصال"),
-                                tr("Engine: ${section.titleEn}", "موتور: ${section.titleFa}"),
+                                ConnectionStatusNarrator.headlineForState(TunnelState.Disconnected, isFa),
+                                tr("Engine: ${section.titleEn}", "بخش: ${section.titleFa}"),
                                 MaterialTheme.colorScheme.onSurface,
                             )
                         }

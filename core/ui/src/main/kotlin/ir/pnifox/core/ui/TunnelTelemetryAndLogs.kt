@@ -68,10 +68,14 @@ fun TunnelTelemetryRow(
     isConnectedForSection: Boolean,
     isTestingPing: Boolean = false,
     onRetestPing: (() -> Unit)? = null,
+    exitIp: String = "",
+    exitLocation: String = "",
+    networkChangeSummary: String = "",
     modifier: Modifier = Modifier,
 ) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         TelemetryMetricTile(
@@ -112,6 +116,42 @@ fun TunnelTelemetryRow(
             onClick = if (isConnectedForSection && !isTestingPing) onRetestPing else null,
             modifier = Modifier.weight(1f),
         )
+    }
+    if (isConnectedForSection && (exitIp.isNotBlank() || networkChangeSummary.isNotBlank())) {
+        PnifoxCard(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+            contentPadding = 10.dp,
+        ) {
+            if (exitIp.isNotBlank()) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = tr("Connected IP: ", "آی‌پی اتصال: "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = if (exitLocation.isNotBlank()) "$exitIp ($exitLocation)" else exitIp,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF10B981),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            if (networkChangeSummary.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = tr("Network changes: $networkChangeSummary", "تغییرات شبکه: $networkChangeSummary"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
     }
 }
 

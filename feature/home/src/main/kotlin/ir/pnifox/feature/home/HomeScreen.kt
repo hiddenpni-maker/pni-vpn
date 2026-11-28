@@ -365,20 +365,23 @@ fun HomeRoute(
                 }
             }
 
-            // Equal Telemetry Row
+            // Equal Telemetry Row + Connected IP & Active Network Changes
             item {
-                val aetherConnected = state.tunnelState is TunnelState.Connected &&
-                    (state.tunnelState as TunnelState.Connected).section == ActiveSectionEngine.AETHER
+                val connectedState = state.tunnelState as? TunnelState.Connected
+                val aetherConnected = connectedState != null && connectedState.section == ActiveSectionEngine.AETHER
                 TunnelTelemetryRow(
                     rxSpeedBps = if (aetherConnected) state.rxSpeedBps else 0L,
                     txSpeedBps = if (aetherConnected) state.txSpeedBps else 0L,
                     sessionRxBytes = if (aetherConnected) state.sessionRxBytes else 0L,
                     sessionTxBytes = if (aetherConnected) state.sessionTxBytes else 0L,
-                    pingMs = if (aetherConnected) (state.tunnelState as? TunnelState.Connected)?.pingMs else null,
+                    pingMs = if (aetherConnected) connectedState?.pingMs else null,
                     modeLabel = if (isFa) state.appSettings.connectionMode.labelFa else state.appSettings.connectionMode.labelEn,
                     isConnectedForSection = aetherConnected,
                     isTestingPing = state.isTestingPing,
                     onRetestPing = viewModel::testActiveRealPing,
+                    exitIp = if (aetherConnected) connectedState?.exitIp.orEmpty() else "",
+                    exitLocation = if (aetherConnected) connectedState?.exitLocation.orEmpty() else "",
+                    networkChangeSummary = if (aetherConnected) connectedState?.networkChangeSummary.orEmpty() else "",
                 )
             }
 
@@ -447,10 +450,10 @@ fun HomeRoute(
                         FilterChip(
                             selected = !isAkamaiStandalone,
                             onClick = {
-                                viewModel.updateApp { it.copy(activePreset = OneTapPreset.WARP_FAST_MASQUE_H2, exitNode = ExitNode.DEFAULT) }
-                                viewModel.updateAether { it.copy(psiphonEnabled = false, psiphonMode = PsiphonChainMode.WARP_TO_PSIPHON, torEnabled = false) }
+                                viewModel.updateApp { it.copy(activePreset = OneTapPreset.WARP_TO_PSIPHON, exitNode = ExitNode.PSIPHON) }
+                                viewModel.updateAether { it.copy(protocol = AetherProtocol.MASQUE, masqueTransport = MasqueTransport.HTTP2, psiphonEnabled = true, psiphonMode = PsiphonChainMode.WARP_TO_PSIPHON, torEnabled = false) }
                             },
-                            label = { Text(tr("AETHER (WARP)", "وارپ (AETHER)"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            label = { Text(tr("Unblock (MASQUE + Psiphon)", "رفع فیلتر (MASQUE + سایفون)"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             modifier = Modifier.weight(1f),
                         )
                         FilterChip(
@@ -551,9 +554,9 @@ fun HomeRoute(
                             ) {
                                 PnifoxDropdownField(
                                     label = tr("Transport", "انتقال"),
-                                    selectedText = state.aetherSettings.masqueTransport.label,
-                                    options = MasqueTransport.entries,
-                                    selectedItem = state.aetherSettings.masqueTransport,
+                                    selectedText = MasqueTransport.HTTP2.label,
+                                    options = listOf(MasqueTransport.HTTP2),
+                                    selectedItem = MasqueTransport.HTTP2,
                                     optionLabel = { it.label },
                                     onSelect = { tr -> viewModel.updateAether { it.copy(masqueTransport = tr) } },
                                     icon = Icons.Rounded.SwapHoriz,
@@ -791,10 +794,15 @@ fun HomeRoute(
                                     singleLine = true,
                                     modifier = Modifier.weight(2f),
                                 )
+                                var epPortDraft by remember(state.aetherSettings.endpointPort) { mutableStateOf(state.aetherSettings.endpointPort.toString()) }
                                 OutlinedTextField(
-                                    value = state.aetherSettings.endpointPort.toString(),
-                                    onValueChange = { v -> v.toIntOrNull()?.let { p -> viewModel.updateAether { it.copy(endpointPort = p) } } },
-                                    label = { Text(tr("Port", "پورت")) },
+                                    value = epPortDraft,
+                                    onValueChange = { v ->
+                                        val digits = v.filter { it.isDigit() }.take(5)
+                                        epPortDraft = digits
+                                        digits.toIntOrNull()?.coerceIn(1, 65535)?.let { p -> viewModel.updateAether { it.copy(endpointPort = p) } }
+                                    },
+                                    label = { Text(tr("Port", "پورت"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
@@ -985,62 +993,42 @@ private fun AetherTopBar(
     onOpenLogs: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val isFa = LocalAppLanguage.current == AppLanguage.PERSIAN
-
+    // Clean, uncluttered Top Bar: VPN/Proxy mode moved to Settings, Stats moved to Bottom Bar
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Image(
             painter = painterResource(UiR.drawable.pnifox_makima_logo),
             contentDescription = "pnifox",
             modifier = Modifier.size(34.dp).clip(CircleShape),
         )
-        Spacer(Modifier.width(6.dp))
-        Text("pnifox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.width(5.dp))
-        Box {
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                modifier = Modifier.clickable { expanded = true },
-            ) {
-                Row(modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (isFa) connectionMode.labelFa else connectionMode.labelEn, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                    Icon(Icons.Rounded.KeyboardArrowDown, null, modifier = Modifier.size(14.dp))
-                }
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                ConnectionMode.entries.forEach { mode ->
-                    DropdownMenuItem(
-                        text = { Text("${mode.labelEn} (${mode.labelFa})") },
-                        onClick = { onSelectMode(mode); expanded = false },
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = tr("pnifox • Unblock", "pnifox • رفع فیلتر"),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         Surface(
             shape = RoundedCornerShape(999.dp),
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
             modifier = Modifier.clickable(onClick = onOpenTelegram),
         ) {
-            Row(modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Telegram", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(13.dp))
-                Spacer(Modifier.width(3.dp))
-                Text(tr("TG", "تلگرام"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(4.dp))
+                Text(tr("TG", "تلگرام"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, maxLines = 1)
             }
         }
-        IconButton(onClick = onOpenStats, modifier = Modifier.size(32.dp)) {
-            Icon(Icons.Rounded.BarChart, contentDescription = "Stats", modifier = Modifier.size(19.dp))
-        }
-        IconButton(onClick = onOpenGuide, modifier = Modifier.size(32.dp)) {
+        Spacer(Modifier.width(2.dp))
+        IconButton(onClick = onOpenGuide, modifier = Modifier.size(34.dp)) {
             Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = "Usage Guide", modifier = Modifier.size(19.dp))
         }
-        IconButton(onClick = onOpenLogs, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onOpenLogs, modifier = Modifier.size(34.dp)) {
             Icon(Icons.Rounded.Code, contentDescription = "Logs", modifier = Modifier.size(19.dp))
         }
-        IconButton(onClick = onOpenSettings, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onOpenSettings, modifier = Modifier.size(34.dp)) {
             Icon(Icons.Rounded.Settings, contentDescription = "Settings", modifier = Modifier.size(19.dp))
         }
     }

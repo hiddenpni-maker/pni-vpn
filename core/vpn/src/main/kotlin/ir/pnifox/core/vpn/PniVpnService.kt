@@ -250,6 +250,8 @@ class PniVpnService : VpnService() {
             // 1. Start underlying SOCKS5 core daemon first (127.0.0.1:10820) and wait until ready
             var discoveredEndpointIp: String? = null
             var discoveredEndpointPort: Int? = null
+            var discoveredExitIp = ""
+            var discoveredExitLoc = ""
             val onStageUpdate: (String, String) -> Unit = { stageEn, stageFa ->
                 vpnStateHolder.updateState(
                     TunnelState.Connecting(
@@ -268,9 +270,18 @@ class PniVpnService : VpnService() {
             val onEndpointDiscovered: (String, Int) -> Unit = { ip, port ->
                 discoveredEndpointIp = ip
                 discoveredEndpointPort = port
-                if (aetherSettings.scanForEndpoint || aetherSettings.endpointIp.isBlank()) {
-                    logs.append("AETHER", LogLevel.INFO, "Discovered diverse endpoint $ip:$port (auto-scan stays enabled)")
+                serviceScope.launch {
+                    preferencesRepo.updateAetherSettings { cur ->
+                        cur.copy(
+                            endpointIp = ip,
+                            endpointPort = port,
+                            lastScannedEndpointIp = ip,
+                            lastScannedEndpointPort = port,
+                            scanForEndpoint = false,
+                        )
+                    }
                 }
+                logs.append("AETHER", LogLevel.INFO, "Cached fastest endpoint $ip:$port for fast next connect")
             }
 
             processManager.activeSocketProtector = { sock -> protect(sock) }
@@ -286,6 +297,12 @@ class PniVpnService : VpnService() {
                     aether = effectiveAether,
                     onStageUpdate = onStageUpdate,
                     onEndpointDiscovered = onEndpointDiscovered,
+                    onExitInfoDiscovered = { exIp, exLoc ->
+                        discoveredExitIp = exIp
+                        discoveredExitLoc = exLoc
+                        vpnStateHolder.updateConnectedExitInfo(exIp, exLoc)
+                    },
+                    forceFreshScan = isAutoRetry,
                 )
                 ActiveSectionEngine.GAMING -> processManager.startGamingDaemon(
                     gaming = gamingSettings,
@@ -412,6 +429,18 @@ class PniVpnService : VpnService() {
             }
 
             refreshSpeedNotification(rxBps = 0L, txBps = 0L)
+            val activeDnsLabel = when {
+                isDnsChangerOnly && section == ActiveSectionEngine.GAMING -> gamingSettings.selectedDnsIp
+                isDnsChangerOnly -> dnsSettings.resolverAddress
+                useMapDns -> "MapDNS (10.233.233.2) → ${appSettings.localDns.ifBlank { "1.1.1.1" }}"
+                else -> tunDns
+            }
+            val netChanges = buildString {
+                append(if (isDnsChangerOnly) "DNS-Only TUN" else "VPN TUN (10.233.233.1)")
+                append(" • DNS: $activeDnsLabel")
+                if (appSettings.bypassIranEnabled) append(" • Bypass IR")
+                if (appSettings.blockAdsEnabled) append(" • AdBlock")
+            }
             vpnStateHolder.updateState(
                 TunnelState.Connected(
                     section = section,
@@ -425,6 +454,10 @@ class PniVpnService : VpnService() {
                     },
                     pingMs = profile?.lastPingMs,
                     connectedAtEpochMs = notifConnectedAtMs,
+                    exitIp = discoveredExitIp,
+                    exitLocation = discoveredExitLoc,
+                    activeDnsSummary = activeDnsLabel,
+                    networkChangeSummary = netChanges,
                 ),
             )
             startStatsLoop(proxy, pauseOnScreenOff = appSettings.pauseTelemetryOnScreenOff)
@@ -460,6 +493,14 @@ class PniVpnService : VpnService() {
                         LogLevel.WARN,
                         "Active tunnel real delay probe timed out (no HTTP response from upstream). Verify server/nameserver/credentials and ISP filtering.",
                     )
+                }
+                if (discoveredExitIp.isBlank() && !isDnsChangerOnly) {
+                    RealDelaySocketProber.fetchExitIpViaSocks5("127.0.0.1", aetherSettings.localSocksPort)?.let { (ip, loc) ->
+                        discoveredExitIp = ip
+                        discoveredExitLoc = loc
+                        vpnStateHolder.updateConnectedExitInfo(ip, loc)
+                        logs.append("ExitIP", LogLevel.INFO, "Connected Exit IP: $ip ($loc)")
+                    }
                 }
             }
         }
@@ -524,11 +565,14 @@ class PniVpnService : VpnService() {
         statsJob?.cancel()
         var lastTx = 0L
         var lastRx = 0L
+        val myUid = android.os.Process.myUid()
+        var lastUidRx = android.net.TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
+        var lastUidTx = android.net.TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
         var ticks = 0
         var zeroRxWarned = false
         statsJob = serviceScope.launch {
             while (isActive && !userRequestedStop) {
-                delay(2000L)
+                delay(1500L)
                 if (!processManager.isPrimaryDaemonAlive() && !userRequestedStop && autoReconnectEnabled) {
                     logs.append("Watchdog", LogLevel.WARN, "Native core process exited unexpectedly — scheduling auto-reconnect...")
                     scheduleAutoReconnect("Native core exited", delayMs = 2500L)
@@ -556,16 +600,30 @@ class PniVpnService : VpnService() {
                     val rxDelta = (rxTotal - lastRx).coerceAtLeast(0L)
                     lastTx = txTotal
                     lastRx = rxTotal
-                    val rxBps = rxDelta / 2L
-                    val txBps = txDelta / 2L
-                    vpnStateHolder.updateSpeed(rxBps = rxBps, txBps = txBps, rxDelta = rxDelta, txDelta = txDelta)
-                    runCatching { dataRepo.recordTrafficDelta(rxDelta = rxDelta, txDelta = txDelta) }
+                    val curUidRx = android.net.TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
+                    val curUidTx = android.net.TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
+                    val uidRxDelta = (curUidRx - lastUidRx).coerceAtLeast(0L)
+                    val uidTxDelta = (curUidTx - lastUidTx).coerceAtLeast(0L)
+                    lastUidRx = curUidRx
+                    lastUidTx = curUidTx
+                    val effRx = if (rxDelta > 0L) rxDelta else uidRxDelta
+                    val effTx = if (txDelta > 0L) txDelta else uidTxDelta
+                    val rxBps = (effRx * 1000L) / 1500L
+                    val txBps = (effTx * 1000L) / 1500L
+                    vpnStateHolder.updateSpeed(rxBps = rxBps, txBps = txBps, rxDelta = effRx, txDelta = effTx)
+                    runCatching { dataRepo.recordTrafficDelta(rxDelta = effRx, txDelta = effTx) }
                     refreshSpeedNotification(rxBps = rxBps, txBps = txBps)
                 } else {
-                    refreshSpeedNotification(
-                        rxBps = vpnStateHolder.rxSpeedBps.value,
-                        txBps = vpnStateHolder.txSpeedBps.value,
-                    )
+                    val curUidRx = android.net.TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
+                    val curUidTx = android.net.TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
+                    val uidRxDelta = (curUidRx - lastUidRx).coerceAtLeast(0L)
+                    val uidTxDelta = (curUidTx - lastUidTx).coerceAtLeast(0L)
+                    lastUidRx = curUidRx
+                    lastUidTx = curUidTx
+                    val rxBps = (uidRxDelta * 1000L) / 1500L
+                    val txBps = (uidTxDelta * 1000L) / 1500L
+                    vpnStateHolder.updateSpeed(rxBps = rxBps, txBps = txBps, rxDelta = uidRxDelta, txDelta = uidTxDelta)
+                    refreshSpeedNotification(rxBps = rxBps, txBps = txBps)
                 }
             }
         }

@@ -181,10 +181,27 @@ fun SettingsRoute(
                 }
             }
 
-            // 2. Global & Routing Card
-            item { PnifoxSectionLabel(title = tr("Global & Routing", "عمومی و مسیریابی")) }
+            // 2. Global & Routing Card (includes VPN / Proxy Mode moved from Top Bar)
+            item { PnifoxSectionLabel(title = tr("Connection Mode & Routing", "حالت اتصال و تنظیمات شبکه")) }
             item {
                 PnifoxCard(contentPadding = metrics.cardPadding) {
+                    Text(
+                        text = tr("Connection Mode (VPN vs Proxy)", "حالت اتصال (VPN یا پروکسی)"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ir.pnifox.core.model.ConnectionMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = state.appSettings.connectionMode == mode,
+                                onClick = { viewModel.updateApp { it.copy(connectionMode = mode) } },
+                                label = { Text(if (isFa) mode.labelFa else mode.labelEn, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
                     PnifoxSwitchRow(
                         title = tr("Auto-Reconnect on Internet Drop / Change", "اتصال مجدد خودکار هنگام قطع و وصل اینترنت"),
                         subtitle = tr("Automatically refreshes tunnel when Wi-Fi or mobile data reconnects.", "هنگام قطع و وصل شدن اینترنت بدون نیاز به خاموش و روشن دستی، اتصال را رفرش می‌کند."),

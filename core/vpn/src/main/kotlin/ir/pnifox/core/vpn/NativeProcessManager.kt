@@ -311,6 +311,8 @@ class NativeProcessManager @Inject constructor(
         aether: AetherSettings,
         onStageUpdate: (stageEn: String, stageFa: String) -> Unit = { _, _ -> },
         onEndpointDiscovered: (ip: String, port: Int) -> Unit = { _, _ -> },
+        onExitInfoDiscovered: (ip: String, location: String) -> Unit = { _, _ -> },
+        forceFreshScan: Boolean = false,
     ): ConnectionError? = withContext(Dispatchers.IO) {
         stopAll()
         val exe = File(nativeDir, "libaether.so")
@@ -341,22 +343,35 @@ class NativeProcessManager @Inject constructor(
         } else {
             aether
         }
-        val args = argBuilder.buildRunArgs(appSettings, effectiveAether, nativeDir, aetherWorkDir, serversDat, routesFile)
         val usePsiphon = argBuilder.isPsiphonActive(appSettings, aether)
         val useTor = argBuilder.isTorActive(appSettings, aether)
+        if (usePsiphon) {
+            killOrphanedProcesses("libpsiphon.so")
+        }
 
         val readyMarkers = when {
             usePsiphon && !aether.psiphonMode.isReverse -> listOf("[+] psiphon is ready")
             useTor -> listOf("[+] tor is ready")
             else -> listOf("[+] socks5 server listening on")
         }
+        val hasCachedIp = effectiveAether.endpointIp.isNotBlank() || effectiveAether.lastScannedEndpointIp.isNotBlank()
         val timeoutMs = when {
             usePsiphon || useTor -> 120_000L
-            aether.scanForEndpoint || aether.endpointIp.isBlank() -> 120_000L
+            forceFreshScan || !hasCachedIp -> 120_000L
             else -> 45_000L
         }
 
-        launchAndAwaitCoreReady(
+        val args = argBuilder.buildRunArgs(
+            appSettings = appSettings,
+            aether = effectiveAether,
+            nativeDir = nativeDir,
+            workDir = aetherWorkDir,
+            psiphonServersDatPath = serversDat,
+            routesFile = routesFile,
+            forceFreshScan = forceFreshScan,
+        )
+
+        val firstErr = launchAndAwaitCoreReady(
             tag = "AETHER",
             command = listOf(exe.absolutePath) + args,
             socksPort = aether.localSocksPort,
@@ -365,7 +380,61 @@ class NativeProcessManager @Inject constructor(
             verifySocksReply = true,
             onStageUpdate = onStageUpdate,
             onEndpointDiscovered = onEndpointDiscovered,
+            onExitInfoDiscovered = onExitInfoDiscovered,
         )
+
+        // Auto-recover from Psiphon BoltDB lock / datastore timeout by clearing stale cache & retrying once
+        if (firstErr is ConnectionError.ProcessExited && usePsiphon &&
+            (firstErr.lastLogLine.contains("tryDatastoreOpenDB", ignoreCase = true) ||
+                firstErr.lastLogLine.contains("psiphon stopped before it was ready", ignoreCase = true))
+        ) {
+            onStageUpdate("Psiphon cache locked — resetting & retrying! 🔧", "کش سایفون قفل شده بود، پاکسازی و تلاش مجدد... 🔧")
+            logs.append("AETHER", LogLevel.WARN, "Detected Psiphon datastore lock timeout; killing orphans, purging psiphon-cache, and retrying...")
+            stopAll()
+            killOrphanedProcesses("libpsiphon.so")
+            runCatching { File(aetherWorkDir, "psiphon-cache").deleteRecursively() }
+            delay(400L)
+            return@withContext launchAndAwaitCoreReady(
+                tag = "AETHER",
+                command = listOf(exe.absolutePath) + args,
+                socksPort = aether.localSocksPort,
+                timeoutMs = timeoutMs,
+                readyMarkers = readyMarkers,
+                verifySocksReply = true,
+                onStageUpdate = onStageUpdate,
+                onEndpointDiscovered = onEndpointDiscovered,
+                onExitInfoDiscovered = onExitInfoDiscovered,
+            )
+        }
+
+        // Auto-fallback to fresh scan if a cached endpoint timed out
+        if (firstErr is ConnectionError.HandshakeTimeout && !forceFreshScan && hasCachedIp && !aether.psiphonMode.isStandalone) {
+            onStageUpdate("Cached IP timed out — scanning fresh endpoint... 🔍", "آی‌پی قبلی جواب نداد، داره آی‌پی جدید اسکن می‌کنه... 🔍")
+            logs.append("AETHER", LogLevel.WARN, "Cached endpoint timed out; retrying with fresh scan...")
+            stopAll()
+            val freshArgs = argBuilder.buildRunArgs(
+                appSettings = appSettings,
+                aether = effectiveAether,
+                nativeDir = nativeDir,
+                workDir = aetherWorkDir,
+                psiphonServersDatPath = serversDat,
+                routesFile = routesFile,
+                forceFreshScan = true,
+            )
+            return@withContext launchAndAwaitCoreReady(
+                tag = "AETHER",
+                command = listOf(exe.absolutePath) + freshArgs,
+                socksPort = aether.localSocksPort,
+                timeoutMs = 120_000L,
+                readyMarkers = readyMarkers,
+                verifySocksReply = true,
+                onStageUpdate = onStageUpdate,
+                onEndpointDiscovered = onEndpointDiscovered,
+                onExitInfoDiscovered = onExitInfoDiscovered,
+            )
+        }
+
+        firstErr
     }
 
     suspend fun startDnsChangerDaemon(
@@ -713,6 +782,7 @@ class NativeProcessManager @Inject constructor(
         socksReplyReadTimeoutMs: Int = 1500,
         onStageUpdate: (stageEn: String, stageFa: String) -> Unit = { _, _ -> },
         onEndpointDiscovered: (ip: String, port: Int) -> Unit = { _, _ -> },
+        onExitInfoDiscovered: (ip: String, location: String) -> Unit = { _, _ -> },
     ): ConnectionError? = withContext(Dispatchers.IO) {
         logs.append(tag, LogLevel.INFO, "Launching: ${command.first().substringAfterLast('/')} ${command.drop(1).joinToString(" ")}")
         val proc = runCatching {
@@ -733,33 +803,33 @@ class NativeProcessManager @Inject constructor(
             """(?:selected (?:MASQUE gateway|WireGuard endpoint)|best (?:gateway|endpoint)|using cloudflare edge)\s+(\[?[0-9a-fA-F:.]+\]?):(\d+)""",
             RegexOption.IGNORE_CASE,
         )
+        val exitRegex = Regex(
+            """masque exit:\s*([0-9a-fA-F:.]+),\s*([^,\n]+)""",
+            RegexOption.IGNORE_CASE,
+        )
+        val lastReportedEndpoint = AtomicReference("")
 
         outputPumpJob = pumpProcessOutput(tag, proc, lastLineRef) { line ->
             endpointRegex.find(line)?.let { m ->
                 val ip = m.groupValues[1].trim('[', ']')
                 val port = m.groupValues[2].toIntOrNull()
-                if (ip.isNotBlank() && port != null) {
+                val key = "$ip:$port"
+                if (ip.isNotBlank() && port != null && lastReportedEndpoint.getAndSet(key) != key) {
                     onEndpointDiscovered(ip, port)
+                }
+            }
+            exitRegex.find(line)?.let { m ->
+                val exitIp = m.groupValues[1].trim()
+                val exitLoc = m.groupValues[2].trim()
+                if (exitIp.isNotBlank()) {
+                    onExitInfoDiscovered(exitIp, exitLoc)
                 }
             }
             if (readyMarkers.any { marker -> line.contains(marker, ignoreCase = true) }) {
                 markerSeenRef.set(true)
             }
-            when {
-                line.contains("hunting for", ignoreCase = true) ->
-                    onStageUpdate("Scanning Cloudflare gateways...", "در حال اسکن دروازه‌های کلودفلر...")
-                line.contains("selected MASQUE", ignoreCase = true) ||
-                    line.contains("selected WireGuard", ignoreCase = true) ||
-                    line.contains("using forced peer", ignoreCase = true) ->
-                    onStageUpdate("Connecting tunnel handshake...", "در حال برقراری دست‌دهی تونل...")
-                line.contains("psiphon is waiting", ignoreCase = true) ->
-                    onStageUpdate("WARP connecting, Psiphon standby...", "در حال اتصال WARP برای سایفون...")
-                line.contains("starting psiphon through", ignoreCase = true) ->
-                    onStageUpdate("WARP ready, starting Psiphon...", "وارپ آماده شد؛ در حال اتصال سایفون...")
-                line.contains("psiphon reached a server", ignoreCase = true) ->
-                    onStageUpdate("Psiphon server reached...", "سایفون به سرور متصل شد...")
-                line.contains("bootstrapping tor", ignoreCase = true) ->
-                    onStageUpdate("Bootstrapping Tor exit...", "در حال راه‌اندازی شبکه تور...")
+            ConnectionStatusNarrator.fromLogLine(line)?.let { funStage ->
+                onStageUpdate(funStage.en, funStage.fa)
             }
         }
 
@@ -883,15 +953,14 @@ class NativeProcessManager @Inject constructor(
         secondaryOutputPumpJob?.cancel()
         secondaryOutputPumpJob = null
         activeProcess?.let { proc ->
-            runCatching { proc.destroy() }
-            runCatching { proc.destroyForcibly() }
+            terminateProcessGracefully(proc)
         }
         activeProcess = null
         secondaryProcess?.let { proc ->
-            runCatching { proc.destroy() }
-            runCatching { proc.destroyForcibly() }
+            terminateProcessGracefully(proc)
         }
         secondaryProcess = null
+        killOrphanedProcesses("libpsiphon.so")
         if (xrayStarted) {
             runCatching {
                 val cls = Class.forName("ir.pni.core.pnixray.Pnixray")
@@ -903,5 +972,33 @@ class NativeProcessManager @Inject constructor(
         activeXrayProfileId = null
         localDesyncServer?.stop()
         localDesyncServer = null
+    }
+
+    private fun terminateProcessGracefully(proc: Process) {
+        runCatching { proc.destroy() }
+        val deadline = System.currentTimeMillis() + 450L
+        while (System.currentTimeMillis() < deadline) {
+            if (!isProcessAlive(proc)) return
+            runCatching { Thread.sleep(45L) }
+        }
+        runCatching { proc.destroyForcibly() }
+    }
+
+    /**
+     * Cleans up orphaned child daemons (e.g. libpsiphon.so holding BoltDB lock in psiphon-cache)
+     * owned by this app's UID without requiring root.
+     */
+    private fun killOrphanedProcesses(vararg targetNames: String) {
+        val myPid = android.os.Process.myPid()
+        runCatching {
+            File("/proc").listFiles()?.forEach { entry ->
+                val pid = entry.name.toIntOrNull() ?: return@forEach
+                if (pid == myPid) return@forEach
+                val cmd = runCatching { File(entry, "cmdline").readText() }.getOrNull() ?: return@forEach
+                if (targetNames.any { cmd.contains(it, ignoreCase = true) }) {
+                    runCatching { android.os.Process.killProcess(pid) }
+                }
+            }
+        }
     }
 }

@@ -10,7 +10,7 @@ enum class AppLanguage(val code: String, val displayLabel: String) {
 
 @Serializable
 enum class ActiveSectionEngine(val titleEn: String, val titleFa: String) {
-    AETHER("AETHER (WARP / MASQUE)", "موتور AETHER (وارپ)"),
+    AETHER("Unblock (MASQUE + Psiphon)", "رفع فیلتر"),
     GAMING("Gaming & Low Ping", "گیم و پینگ پایین"),
     SERVER("Custom Server (Xray / Sing-box)", "سرور دلخواه"),
     DNS("DNS Tunnel (DNSTT)", "تونل DNS"),
@@ -38,7 +38,7 @@ enum class ExitNode(val labelEn: String, val labelFa: String, val badge: String)
 
 @Serializable
 enum class CoreEngine(val displayEn: String, val displayFa: String, val binaryName: String?) {
-    AETHER("AETHER Core", "موتور AETHER", "libaether.so"),
+    AETHER("Unblock Core", "موتور رفع فیلتر", "libaether.so"),
     XRAY("Xray-core", "هسته Xray", "libxray.so"),
     SING_BOX("Sing-box Core", "هسته Sing-box", "libpnisingbox.so"),
     PSIPHON("Psiphon", "سایفون", "libpsiphon.so"),
@@ -218,6 +218,10 @@ sealed interface TunnelState {
         val resolvedIp: String,
         val pingMs: Int?,
         val connectedAtEpochMs: Long,
+        val exitIp: String = "",
+        val exitLocation: String = "",
+        val activeDnsSummary: String = "",
+        val networkChangeSummary: String = "",
     ) : TunnelState
 
     data class Error(

@@ -142,19 +142,22 @@ fun ScannerRoute(
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (state.provider != ScanProvider.AKAMAI) {
+                            OutlinedTextField(
+                                value = state.portText,
+                                onValueChange = viewModel::setPort,
+                                label = { Text(tr("Port", "پورت"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                         OutlinedTextField(
-                            value = state.port.toString(),
-                            onValueChange = viewModel::setPort,
-                            label = { Text("Port") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = state.candidateCount.toString(),
-                            onValueChange = { v -> v.toIntOrNull()?.let { viewModel.setCandidateCount(it) } },
-                            label = { Text(tr("Samples", "تعداد")) },
+                            value = state.candidateCountText,
+                            onValueChange = viewModel::setCandidateCountText,
+                            label = { Text(tr("Samples", "تعداد"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f),
@@ -212,8 +215,26 @@ fun ScannerRoute(
                     val topHealthy = state.filteredResults.filter { it.packetLossPct <= 35 }.take(25).map { it.ip }
                     if (topHealthy.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = { viewModel.applyIpsToPsiphonCdn(topHealthy, state.provider) }) {
-                            Text(tr("Apply Top ${topHealthy.size} to Akamai / Psiphon CDN", "اعمال ${topHealthy.size} IP به فرانتینگ اکامای"), style = MaterialTheme.typography.labelSmall)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(onClick = { viewModel.applyIpsToPsiphonCdn(topHealthy, state.provider) }) {
+                                Text(tr("Apply Top ${topHealthy.size} to Akamai", "اعمال ${topHealthy.size} IP به اکامای"), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(onClick = {
+                                clipboard.setText(AnnotatedString(topHealthy.joinToString("\n")))
+                            }) {
+                                Text(tr("Copy TXT", "کپی TXT"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                            }
+                            OutlinedButton(onClick = {
+                                val csv = buildString {
+                                    appendLine("IP,Port,PingMs,JitterMs,LossPct,SpeedKbps")
+                                    state.filteredResults.take(50).forEach { r ->
+                                        appendLine("${r.ip},${r.port},${r.latencyMs},${r.jitterMs},${r.packetLossPct},${r.downloadSpeedKbps}")
+                                    }
+                                }
+                                clipboard.setText(AnnotatedString(csv))
+                            }) {
+                                Text(tr("Copy CSV", "کپی CSV"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                            }
                         }
                     }
                 }
@@ -303,7 +324,7 @@ fun ScannerRoute(
                         Spacer(Modifier.height(8.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             OutlinedButton(onClick = { viewModel.applyToAether(row) }) {
-                                Text(tr("Use in AETHER", "اعمال به AETHER"), style = MaterialTheme.typography.labelSmall)
+                                Text(tr("Use in Unblock", "اعمال به رفع فیلتر"), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                             }
                             OutlinedButton(onClick = { viewModel.applyIpsToPsiphonCdn(listOf(row.ip), row.provider) }) {
                                 Text(tr("Akamai CDN", "اکامای CDN"), style = MaterialTheme.typography.labelSmall)

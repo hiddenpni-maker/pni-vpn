@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Radar
@@ -189,11 +190,10 @@ fun main() = application {
 
                             val tabs = listOf(
                                 DesktopTab.AETHER to Icons.Rounded.Bolt,
-                                DesktopTab.GAMING to Icons.Rounded.SportsEsports,
                                 DesktopTab.SERVERS to Icons.Rounded.Storage,
-                                DesktopTab.MHR to Icons.Rounded.Shield,
                                 DesktopTab.DNS to Icons.Rounded.Dns,
                                 DesktopTab.SCANNER to Icons.Rounded.Radar,
+                                DesktopTab.STATS to Icons.Rounded.BarChart,
                                 DesktopTab.SETTINGS to Icons.Rounded.Settings,
                             )
                             tabs.forEach { (tab, icon) ->
@@ -306,30 +306,31 @@ fun main() = application {
                         modifier = Modifier.weight(1f).fillMaxHeight().padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        // Top bar: Quick System Proxy vs TUN Mode switcher + Corner Telegram Channel button
+                        // Clean Top Bar (Proxy/TUN mode moved to Settings) + Unified Hub Switcher
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text(
-                                text = dtr("Mode:", "حالت:"),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
-                            WindowsTunnelMode.entries.forEach { m ->
-                                FilterChip(
-                                    selected = state.persisted.windowsTunnelMode == m,
-                                    onClick = { holder.switchWindowsTunnelModeQuick(m) },
-                                    label = {
-                                        Text(
-                                            if (app.language == AppLanguage.PERSIAN) m.labelFa else m.labelEn,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
+                            if (state.selectedTab == DesktopTab.AETHER || state.selectedTab == DesktopTab.GAMING || state.selectedTab == DesktopTab.MHR) {
+                                listOf(
+                                    DesktopTab.AETHER to dtr("Unblock", "رفع فیلتر"),
+                                    DesktopTab.GAMING to dtr("Gaming", "گیمینگ"),
+                                    DesktopTab.MHR to dtr("MHR Relay", "رله MHR"),
+                                ).forEach { (t, lbl) ->
+                                    FilterChip(
+                                        selected = state.selectedTab == t,
+                                        onClick = { holder.selectTab(t) },
+                                        label = { Text(lbl, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = if (app.language == AppLanguage.PERSIAN) state.selectedTab.labelFa else state.selectedTab.labelEn,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                             Spacer(Modifier.weight(1f))
@@ -363,6 +364,9 @@ fun main() = application {
                             isConnected = connected != null,
                             isTestingPing = state.isTestingPing,
                             onRetestPing = { holder.testActiveRealPing() },
+                            exitIp = connected?.exitIp.orEmpty(),
+                            exitLocation = connected?.exitLocation.orEmpty(),
+                            networkChangeSummary = connected?.networkChangeSummary.orEmpty(),
                         )
 
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -373,6 +377,15 @@ fun main() = application {
                                 DesktopTab.MHR -> MhrDesktopTab(state, holder)
                                 DesktopTab.DNS -> DnsDesktopTab(state, holder)
                                 DesktopTab.SCANNER -> ScannerDesktopTab(state, holder)
+                                DesktopTab.STATS -> DesktopCard {
+                                    Text(dtr("Session & Lifetime Traffic", "نمودار و آمار مصرف"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(10.dp))
+                                    Text(dtr("Session Download: ", "دانلود نشست فعلی: ") + ir.pnifox.core.model.TrafficFormatters.formatBytes(state.sessionRxBytes))
+                                    Text(dtr("Session Upload: ", "آپلود نشست فعلی: ") + ir.pnifox.core.model.TrafficFormatters.formatBytes(state.sessionTxBytes))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(dtr("Total Download: ", "کل دانلود ثبت‌شده: ") + ir.pnifox.core.model.TrafficFormatters.formatBytes(state.persisted.totalRxBytes + state.sessionRxBytes))
+                                    Text(dtr("Total Upload: ", "کل آپلود ثبت‌شده: ") + ir.pnifox.core.model.TrafficFormatters.formatBytes(state.persisted.totalTxBytes + state.sessionTxBytes))
+                                }
                                 DesktopTab.SETTINGS -> SettingsDesktopTab(state, holder)
                             }
                         }

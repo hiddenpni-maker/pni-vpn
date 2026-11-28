@@ -26,6 +26,86 @@ object RealDelaySocketProber {
         targetPort: Int = 443,
         path: String = "/generate_204",
         timeoutMs: Int = 5500,
+    ): Int? {
+        val targets = listOf(
+            Triple(targetHost, targetPort, path),
+            Triple("cp.cloudflare.com", 443, "/generate_204"),
+            Triple("connectivitycheck.gstatic.com", 443, "/generate_204"),
+        ).distinct()
+        for ((h, p, reqPath) in targets) {
+            val ms = probeSingleHttp204ViaSocks5(socksHost, socksPort, h, p, reqPath, timeoutMs)
+            if (ms != null) return ms
+        }
+        return null
+    }
+
+    /**
+     * Fetches the active tunnel's public Exit IP and location/colo via Cloudflare trace over SOCKS5.
+     */
+    fun fetchExitIpViaSocks5(
+        socksHost: String = "127.0.0.1",
+        socksPort: Int,
+        timeoutMs: Int = 4500,
+    ): Pair<String, String>? = runCatching {
+        val rawSocket = Socket()
+        rawSocket.soTimeout = timeoutMs
+        rawSocket.connect(InetSocketAddress(socksHost, socksPort), 1500)
+        val out = rawSocket.getOutputStream()
+        val ins = rawSocket.getInputStream()
+        out.write(byteArrayOf(0x05, 0x01, 0x00))
+        out.flush()
+        val greet = ByteArray(2)
+        readExact(ins, greet)
+        check(greet[0] == 0x05.toByte() && greet[1] == 0x00.toByte())
+        val targetHost = "1.1.1.1"
+        val hostBytes = targetHost.toByteArray(Charsets.US_ASCII)
+        val req = ByteArrayOutputStream(7 + hostBytes.size)
+        req.write(byteArrayOf(0x05, 0x01, 0x00, 0x03, hostBytes.size.toByte()))
+        req.write(hostBytes)
+        req.write(0x01)
+        req.write(0xBB)
+        out.write(req.toByteArray())
+        out.flush()
+        val repHead = ByteArray(4)
+        readExact(ins, repHead)
+        check(repHead[0] == 0x05.toByte() && repHead[1] == 0x00.toByte())
+        when (repHead[3].toInt() and 0xFF) {
+            0x01 -> readExact(ins, ByteArray(6))
+            0x04 -> readExact(ins, ByteArray(18))
+            0x03 -> { val len = ins.read(); check(len > 0); readExact(ins, ByteArray(len + 2)) }
+        }
+        val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
+        val ssl = factory.createSocket(rawSocket, "cloudflare.com", 443, true) as SSLSocket
+        var ip = ""
+        var loc = ""
+        var colo = ""
+        ssl.use { tls ->
+            tls.soTimeout = timeoutMs
+            tls.startHandshake()
+            val httpReq = "GET /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n"
+            tls.outputStream.write(httpReq.toByteArray(Charsets.US_ASCII))
+            tls.outputStream.flush()
+            val body = tls.inputStream.bufferedReader().readText()
+            body.lineSequence().forEach { line ->
+                when {
+                    line.startsWith("ip=") -> ip = line.removePrefix("ip=").trim()
+                    line.startsWith("loc=") -> loc = line.removePrefix("loc=").trim()
+                    line.startsWith("colo=") -> colo = line.removePrefix("colo=").trim()
+                }
+            }
+        }
+        check(ip.isNotBlank())
+        val locLabel = listOf(loc, colo).filter { it.isNotBlank() }.joinToString(" / ")
+        ip to locLabel
+    }.getOrNull()
+
+    private fun probeSingleHttp204ViaSocks5(
+        socksHost: String,
+        socksPort: Int,
+        targetHost: String,
+        targetPort: Int,
+        path: String,
+        timeoutMs: Int,
     ): Int? = runCatching {
         val rawSocket = Socket()
         rawSocket.soTimeout = timeoutMs

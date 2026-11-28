@@ -37,12 +37,13 @@ enum class DesktopTab(
     val labelEn: String,
     val labelFa: String,
 ) {
-    AETHER("AETHER (WARP)", "موتور AETHER"),
-    GAMING("Gaming & Presets", "گیم و حالت‌ها"),
+    AETHER("Unblock Hub", "رفع فیلتر"),
+    GAMING("Gaming", "گیمینگ"),
     SERVERS("Servers", "سرورها"),
     MHR("MHR Relay", "رله MHR"),
     DNS("DNS Tunnel", "تونل DNS"),
-    SCANNER("CF Scanner", "اسکنر IP"),
+    SCANNER("IP Scanner", "اسکنر IP"),
+    STATS("Traffic Stats", "نمودار مصرف"),
     SETTINGS("Settings & Guide", "تنظیمات و راهنما"),
 }
 

@@ -60,6 +60,16 @@ class VpnStateHolder @Inject constructor() {
         }
     }
 
+    fun updateConnectedExitInfo(exitIp: String, exitLocation: String) {
+        val current = _tunnelState.value
+        if (current is TunnelState.Connected && exitIp.isNotBlank()) {
+            _tunnelState.value = current.copy(
+                exitIp = exitIp,
+                exitLocation = exitLocation.ifBlank { current.exitLocation },
+            )
+        }
+    }
+
     fun updateSpeed(rxBps: Long, txBps: Long, rxDelta: Long, txDelta: Long) {
         _rxSpeedBps.value = rxBps
         _txSpeedBps.value = txBps
@@ -102,6 +112,7 @@ class VpnController @Inject constructor(
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
     private var proxyConnectJob: Job? = null
+    private var proxyStatsJob: Job? = null
     @Volatile private var lastToggleTimestampMs = 0L
 
     init {
@@ -233,6 +244,8 @@ class VpnController @Inject constructor(
             proxyConnectJob = scope.launch {
                 var discoveredIp: String? = null
                 var discoveredPort: Int? = null
+                var discoveredExitIp = ""
+                var discoveredExitLoc = ""
                 val onStage: (String, String) -> Unit = { stageEn, stageFa ->
                     stateHolder.updateState(
                         TunnelState.Connecting(
@@ -249,9 +262,15 @@ class VpnController @Inject constructor(
                     if (aetherSettings.scanForEndpoint || aetherSettings.endpointIp.isBlank()) {
                         scope.launch {
                             preferencesRepo.updateAetherSettings { cur ->
-                                cur.copy(endpointIp = ip, endpointPort = port, scanForEndpoint = false)
+                                cur.copy(
+                                    endpointIp = ip,
+                                    endpointPort = port,
+                                    lastScannedEndpointIp = ip,
+                                    lastScannedEndpointPort = port,
+                                    scanForEndpoint = false,
+                                )
                             }
-                            logs.append("AETHER", LogLevel.INFO, "Saved discovered endpoint $ip:$port for fast future connects")
+                            logs.append("AETHER", LogLevel.INFO, "Saved endpoint $ip:$port for instant next reconnect")
                         }
                     }
                 }
@@ -261,6 +280,11 @@ class VpnController @Inject constructor(
                         aether = aetherSettings,
                         onStageUpdate = onStage,
                         onEndpointDiscovered = onDiscovered,
+                        onExitInfoDiscovered = { exIp, exLoc ->
+                            discoveredExitIp = exIp
+                            discoveredExitLoc = exLoc
+                            stateHolder.updateConnectedExitInfo(exIp, exLoc)
+                        },
                     )
                     ActiveSectionEngine.GAMING -> processManager.startGamingDaemon(
                         gaming = gamingSettings,
@@ -305,6 +329,8 @@ class VpnController @Inject constructor(
                         }
                         ActiveSectionEngine.MHR -> "${mhrSettings.mode.labelEn} • ${mhrSettings.googleIp}"
                     }
+                    val dnsLabel = if (section == ActiveSectionEngine.GAMING) gamingSettings.selectedDnsIp else appSettings.localDns.ifBlank { "1.1.1.1" }
+                    val netSummary = "Proxy :${aetherSettings.localSocksPort} • DNS $dnsLabel" + if (appSettings.bypassIranEnabled) " • IR Bypass" else ""
                     stateHolder.updateState(
                         TunnelState.Connected(
                             section = section,
@@ -314,10 +340,42 @@ class VpnController @Inject constructor(
                             resolvedIp = endpoint,
                             pingMs = profile?.lastPingMs,
                             connectedAtEpochMs = System.currentTimeMillis(),
+                            exitIp = discoveredExitIp,
+                            exitLocation = discoveredExitLoc,
+                            activeDnsSummary = dnsLabel,
+                            networkChangeSummary = netSummary,
                         ),
                     )
-                    delay(900L)
+                    startProxyTrafficLoop()
+                    delay(800L)
                     refreshActiveRealDelay()
+                    if (discoveredExitIp.isBlank()) {
+                        RealDelaySocketProber.fetchExitIpViaSocks5("127.0.0.1", aetherSettings.localSocksPort)?.let { (ip, loc) ->
+                            stateHolder.updateConnectedExitInfo(ip, loc)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startProxyTrafficLoop() {
+        proxyStatsJob?.cancel()
+        proxyStatsJob = scope.launch {
+            val uid = android.os.Process.myUid()
+            var lastRx = android.net.TrafficStats.getUidRxBytes(uid).coerceAtLeast(0L)
+            var lastTx = android.net.TrafficStats.getUidTxBytes(uid).coerceAtLeast(0L)
+            while (stateHolder.tunnelState.value is TunnelState.Connected) {
+                delay(1500L)
+                val curRx = android.net.TrafficStats.getUidRxBytes(uid).coerceAtLeast(0L)
+                val curTx = android.net.TrafficStats.getUidTxBytes(uid).coerceAtLeast(0L)
+                val dRx = (curRx - lastRx).coerceAtLeast(0L)
+                val dTx = (curTx - lastTx).coerceAtLeast(0L)
+                lastRx = curRx
+                lastTx = curTx
+                stateHolder.updateSpeed((dRx * 1000L) / 1500L, (dTx * 1000L) / 1500L, dRx, dTx)
+                if (dRx > 0L || dTx > 0L) {
+                    runCatching { dataRepo.recordTrafficDelta(rxDelta = dRx, txDelta = dTx) }
                 }
             }
         }
@@ -326,6 +384,7 @@ class VpnController @Inject constructor(
     fun disconnect() {
         logs.append("Controller", LogLevel.INFO, "Disconnecting tunnel.")
         proxyConnectJob?.cancel()
+        proxyStatsJob?.cancel()
         processManager.stopAll()
         val stopIntent = Intent(context, PniVpnService::class.java).apply {
             action = PniVpnService.ACTION_STOP
